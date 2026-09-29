@@ -221,8 +221,8 @@ export const mutations = {
   },
   showEReader(state, { libraryItem, keepProgress, fileId }) {
     state.selectedLibraryItem = libraryItem
-    state.ereaderKeepProgress = keepProgress
-    state.ereaderFileId = fileId
+    state.ereaderKeepProgress = keepProgress !== false
+    state.ereaderFileId = fileId == null ? null : String(fileId)
 
     state.showEReader = true
   },

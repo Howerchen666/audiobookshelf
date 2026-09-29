@@ -299,4 +299,27 @@ describe('LibraryItemController', () => {
       expect(fakeRes.sendStatus.calledWith(403)).to.be.true
     })
   })
+
+  describe('ebook progress cleanup', () => {
+    it('removes progress for ebook inodes removed from the library item', async () => {
+      const library = await Database.libraryModel.create({ name: 'Ebooks', mediaType: 'book' })
+      const folder = await Database.libraryFolderModel.create({ path: '/ebooks', libraryId: library.id })
+      const book = await Database.bookModel.create({ title: 'Book', audioFiles: [], tags: [], narrators: [], genres: [], chapters: [] })
+      const ebookFile = {
+        ino: 'ebook-1',
+        isSupplementary: true,
+        metadata: { filename: 'book.pdf', ext: '.pdf', path: '/ebooks/book.pdf', relPath: 'book.pdf', size: 10 }
+      }
+      const libraryItem = await Database.libraryItemModel.create({ libraryFiles: [ebookFile], mediaId: book.id, mediaType: 'book', libraryId: library.id, libraryFolderId: folder.id })
+      const user = await Database.userModel.create({ username: 'reader', type: 'user' })
+      await Database.ebookProgressModel.create({ userId: user.id, libraryItemId: libraryItem.id, fileIno: 'ebook-1', positionType: 'page', positionValue: '4', progress: 0.3, displayLabel: 'Page 4 of 10' })
+
+      libraryItem.libraryFiles = []
+      libraryItem.changed('libraryFiles', true)
+      await libraryItem.save()
+
+      expect(await Database.ebookProgressModel.count({ where: { libraryItemId: libraryItem.id } })).to.equal(0)
+    })
+  })
+
 })

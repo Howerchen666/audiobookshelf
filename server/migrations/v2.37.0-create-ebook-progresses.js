@@ -1,6 +1,6 @@
 const { DataTypes } = require('sequelize')
 
-const migrationVersion = '2.36.1'
+const migrationVersion = '2.37.0'
 const migrationName = `${migrationVersion}-create-ebook-progresses`
 const loggerPrefix = `[${migrationVersion} migration]`
 

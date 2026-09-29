@@ -71,7 +71,7 @@
           <div v-if="!isPodcast && progressPercent > 0" class="px-4 py-2 mt-4 bg-primary text-sm font-semibold rounded-md text-gray-100 relative max-w-max mx-auto md:mx-0" :class="resettingProgress ? 'opacity-25' : ''">
             <p v-if="progressPercent < 1" class="leading-6">{{ $strings.LabelYourProgress }}: {{ Math.round(progressPercent * 100) }}%</p>
             <p v-else class="text-xs">{{ $strings.LabelFinished }} {{ $formatDate(userProgressFinishedAt, dateFormat) }}</p>
-            <p v-if="progressPercent < 1 && useEBookProgress && primaryEbookProgress" class="text-gray-200 text-xs">{{ primaryEbookProgress.displayLabel }}</p>
+            <p v-if="primaryEbookProgress" class="text-gray-200 text-xs"><span v-if="!useEBookProgress">{{ $strings.LabelEbook }}: {{ Math.round(primaryEbookProgress.progress * 100) }}% · </span>{{ primaryEbookProgress.displayLabel }}</p>
             <p v-if="progressPercent < 1 && !useEBookProgress" class="text-gray-200 text-xs">{{ $getString('LabelTimeRemaining', [$elapsedPretty(userTimeRemaining)]) }}</p>
             <p class="text-gray-400 text-xs pt-1">{{ $strings.LabelStarted }} {{ $formatDate(userProgressStartedAt, dateFormat) }}</p>
 
@@ -603,8 +603,8 @@ export default {
       this.isDescriptionClamped = this.$refs.description.scrollHeight > this.$refs.description.clientHeight
     },
     ebookProgressUpdated(record) {
-      if (record.libraryItemId !== this.libraryItemId) return
-      const index = this.ebookProgress.findIndex((progress) => progress.id === record.id)
+      if (String(record.libraryItemId) !== String(this.libraryItemId)) return
+      const index = this.ebookProgress.findIndex((progress) => String(progress.fileIno) === String(record.fileIno))
       if (index === -1) this.ebookProgress.push(record)
       else this.$set(this.ebookProgress, index, record)
     },

@@ -79,7 +79,7 @@ export default {
       return /^epubcfi\(.+\)$/.test(value) ? value : null
     },
     localStorageLocationsKey() {
-      return `ebookLocations-${this.libraryItemId}`
+      return `ebookLocations-${this.libraryItemId}-${this.fileIno}`
     },
     readerWidth() {
       if (this.windowWidth < 640) return this.windowWidth
@@ -196,11 +196,16 @@ export default {
         return rtl ? this.prev() : this.next()
       }
     },
-    updateProgress(payload) {
+    updateProgress(payload, migrateLegacy = false) {
       if (!this.keepProgress || !this.canSaveProgress || !this.fileIno) return
-      this.$axios
-        .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
-        .then((record) => this.$emit('ebook-progress', record))
+      const progressPayload = migrateLegacy ? { ...payload, migrateLegacy: true } : payload
+      return this.$axios
+        .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, progressPayload, { progress: false })
+        .then((record) => {
+          this.$emit('ebook-progress', record)
+          this.$eventBus?.$emit('ebook-progress-updated', record)
+          return record
+        })
         .catch((error) => console.error('EpubReader.updateProgress failed:', error))
     },
     getAllEbookLocationData() {
@@ -289,7 +294,7 @@ export default {
       return locationsObject.locations
     },
     /** @param {string} location - CFI of the new location */
-    relocated(location) {
+    relocated(location, migrateLegacy = false) {
       if (!location?.start?.cfi) return
       const progress = Math.max(0, Math.min(1, Number(location.end?.percentage) || 0))
       const chapter = this.findChapterFromPosition(this.flattenChapters(this.chapters), progress)
@@ -298,7 +303,7 @@ export default {
         positionValue: location.start.cfi,
         progress,
         displayLabel: chapter?.title || `${Math.round(progress * 100)}%`
-      })
+      }, migrateLegacy)
     },
     initEpub() {
       /** @type {EpubReader} */
@@ -367,15 +372,17 @@ export default {
               restored = true
             } catch (error) {
               console.error('EpubReader failed to restore saved CFI:', error)
+              this.$emit('position-rejected')
               await reader.rendition.display()
             }
           } else {
+            if (this.ebookProgress) this.$emit('position-rejected')
             await reader.rendition.display()
           }
 
           this.canSaveProgress = true
           reader.rendition.on('relocated', reader.relocated)
-          if (restored && this.ebookProgress?.legacy) this.relocated(reader.rendition.currentLocation())
+          if (restored && this.ebookProgress?.legacy) this.relocated(reader.rendition.currentLocation(), true)
         })
         .catch((error) => {
           console.error('EpubReader.initEpub failed:', error)

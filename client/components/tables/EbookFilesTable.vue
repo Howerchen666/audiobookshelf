@@ -18,7 +18,7 @@
             <th class="text-left px-4">{{ $strings.LabelPath }}</th>
             <th class="text-left w-24 min-w-24">{{ $strings.LabelSize }}</th>
             <th class="text-left px-4 w-24">
-              {{ $strings.LabelRead }} <ui-tooltip :text="$strings.LabelReadEbookWithoutProgress" direction="top" class="inline-block"><span class="material-symbols text-sm align-middle">info</span></ui-tooltip>
+              {{ $strings.LabelRead }}
             </th>
             <th v-if="showMoreColumn" class="text-center w-16"></th>
           </tr>
@@ -89,7 +89,7 @@ export default {
       localStorage.setItem('showFullPath', this.showFullPath ? 1 : 0)
     },
     readEbook(fileIno) {
-      this.$store.commit('showEReader', { libraryItem: this.libraryItem, keepProgress: true, fileId: fileIno })
+      this.$store.commit('showEReader', { libraryItem: this.libraryItem, keepProgress: true, fileId: String(fileIno) })
     },
     clickBar() {
       this.showFiles = !this.showFiles

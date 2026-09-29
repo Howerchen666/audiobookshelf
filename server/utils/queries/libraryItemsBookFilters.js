@@ -47,9 +47,10 @@ module.exports = {
    * different where options are required
    *
    * @param {string} value
+   * @param {boolean} [isHomePage=false]
    * @returns {Sequelize.WhereOptions}
    */
-  getCollapseSeriesMediaProgressFilter(value) {
+  getCollapseSeriesMediaProgressFilter(value, isHomePage = false) {
     const mediaWhere = {}
     if (value === 'not-finished') {
       mediaWhere['$books.mediaProgresses.isFinished$'] = {
@@ -71,7 +72,8 @@ module.exports = {
           '$books.mediaProgresses.ebookProgress$': {
             [Sequelize.Op.or]: [null, 0]
           }
-        }
+        },
+        Sequelize.literal('NOT EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = "books->libraryItem".id AND ep.userId = :ebookProgressUserId AND ep.progress > 0)')
       ]
     } else if (value === 'finished') {
       mediaWhere['$books.mediaProgresses.isFinished$'] = true
@@ -88,7 +90,7 @@ module.exports = {
             { '$books.mediaProgresses.isFinished$': false }
           ]
         },
-        Sequelize.literal('EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = "books->libraryItem".id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1)')
+        Sequelize.literal(`EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = "books->libraryItem".id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1) AND NOT EXISTS (SELECT 1 FROM mediaProgresses emp WHERE emp.mediaItemId = books.id AND emp.userId = :ebookProgressUserId AND (emp.isFinished = 1${isHomePage ? ' OR emp.hideFromContinueListening = 1' : ''}))`)
       ]
     }
     return mediaWhere
@@ -564,8 +566,9 @@ module.exports = {
     let { mediaWhere, replacements } = this.getMediaGroupQuery(filterGroup, filterValue)
     let bookWhere = Array.isArray(mediaWhere) ? mediaWhere : [mediaWhere]
 
+    const hiddenProgressClause = isHomePage ? ' OR emp.hideFromContinueListening = 1' : ''
     const ebookInProgress = Sequelize.literal(
-      'EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1)'
+      `EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1) AND NOT EXISTS (SELECT 1 FROM mediaProgresses emp WHERE emp.mediaItemId = book.id AND emp.userId = :ebookProgressUserId AND (emp.isFinished = 1${hiddenProgressClause}))`
     )
     if (user && filterGroup === 'progress' && filterValue === 'in-progress') {
       bookWhere = [{ [Sequelize.Op.or]: [mediaWhere, ebookInProgress] }]
@@ -590,7 +593,7 @@ module.exports = {
       let seriesBookWhere = null
       let seriesWhere = null
       if (filterGroup === 'progress') {
-        seriesWhere = this.getCollapseSeriesMediaProgressFilter(filterValue)
+        seriesWhere = this.getCollapseSeriesMediaProgressFilter(filterValue, isHomePage)
       } else if (filterGroup === 'missing' && filterValue === 'authors') {
         seriesWhere = {
           ['$books.authors.id$']: null

@@ -153,16 +153,19 @@ class MeController {
     const libraryItem = await getAuthorizedEbookItem(req, res, true)
     if (!libraryItem) return
 
-    const { positionType, positionValue, progress, displayLabel } = req.body || {}
-    if (typeof positionType !== 'string' || !positionType || typeof positionValue !== 'string' || !positionValue || typeof displayLabel !== 'string' || !displayLabel || typeof progress !== 'number' || !Number.isFinite(progress) || progress < 0 || progress > 1) {
+    const { positionType, positionValue, progress, displayLabel, migrateLegacy } = req.body || {}
+    if (typeof positionType !== 'string' || !positionType || typeof positionValue !== 'string' || !positionValue || typeof displayLabel !== 'string' || !displayLabel || typeof progress !== 'number' || !Number.isFinite(progress) || progress < 0 || progress > 1 || (migrateLegacy !== undefined && typeof migrateLegacy !== 'boolean')) {
       return res.status(400).send('Invalid ebook progress payload')
     }
 
-    const [ebookProgress] = await Database.ebookProgressModel.upsert(
+    const progressKey = {
+      userId: req.user.id,
+      libraryItemId: libraryItem.id,
+      fileIno: String(req.params.fileIno)
+    }
+    await Database.ebookProgressModel.upsert(
       {
-        userId: req.user.id,
-        libraryItemId: libraryItem.id,
-        fileIno: String(req.params.fileIno),
+        ...progressKey,
         positionType,
         positionValue,
         progress,
@@ -170,6 +173,20 @@ class MeController {
       },
       { returning: true }
     )
+    // SQLite can return the attempted insert UUID when an upsert updates an
+    // existing row. Read the persisted row so clients receive its stable id.
+    const ebookProgress = await Database.ebookProgressModel.findOne({ where: progressKey })
+
+    if (migrateLegacy) {
+      const legacyProgress = (req.user.mediaProgresses || []).find((mediaProgress) => mediaProgress.mediaItemType === 'book' && mediaProgress.mediaItemId === libraryItem.mediaId)
+      if (legacyProgress && (legacyProgress.ebookLocation != null || legacyProgress.ebookProgress > 0)) {
+        legacyProgress.ebookLocation = null
+        legacyProgress.ebookProgress = 0
+        await legacyProgress.save({ silent: true })
+        SocketAuthority.clientEmitter(req.user.id, 'user_updated', req.user.toOldJSONForBrowser())
+      }
+    }
+
     res.json(ebookProgress)
   }
 
@@ -554,7 +571,9 @@ class MeController {
   async getAllLibraryItemsInProgress(req, res) {
     const limit = !isNaN(req.query.limit) ? Number(req.query.limit) || 25 : 25
 
-    const mediaProgressesInProgress = req.user.mediaProgresses.filter((mp) => !mp.isFinished && (mp.currentTime > 0 || mp.ebookProgress > 0))
+    const mediaProgresses = req.user.mediaProgresses || []
+    const mediaProgressesInProgress = mediaProgresses.filter((mp) => !mp.isFinished && !mp.hideFromContinueListening && (mp.currentTime > 0 || mp.ebookProgress > 0))
+    const bookMediaProgressByLibraryItemId = new Map(mediaProgresses.filter((mp) => mp.mediaItemType === 'book' && mp.extraData?.libraryItemId).map((mp) => [mp.extraData.libraryItemId, mp]))
     const ebookProgressesInProgress = await Database.ebookProgressModel.findAll({
       where: { userId: req.user.id, progress: { [Op.gt]: 0, [Op.lt]: 1 } }
     })
@@ -589,7 +608,8 @@ class MeController {
 
     for (const ebookProgress of ebookProgressesInProgress) {
       const libraryItem = libraryItems.find((item) => item.id === ebookProgress.libraryItemId)
-      if (!libraryItem || !req.user.checkCanAccessLibraryItem(libraryItem)) continue
+      const mediaProgress = bookMediaProgressByLibraryItemId.get(ebookProgress.libraryItemId)
+      if (!libraryItem || mediaProgress?.isFinished || mediaProgress?.hideFromContinueListening || !req.user.checkCanAccessLibraryItem(libraryItem)) continue
       const existing = bookItemsInProgress.get(libraryItem.id)
       const progressLastUpdate = ebookProgress.updatedAt.valueOf()
       if (existing) {

@@ -2,7 +2,7 @@
   <div class="w-full h-full">
     <div class="h-full max-h-full w-full">
       <div ref="viewer" class="ebook-viewer absolute overflow-y-scroll left-0 right-0 top-16 w-full max-w-4xl m-auto z-10 border border-black/20 shadow-md bg-white">
-        <iframe ref="iframe" title="html-viewer" width="100%"> Loading </iframe>
+        <iframe ref="iframe" title="html-viewer" class="block w-full border-0" scrolling="no"> Loading </iframe>
       </div>
     </div>
   </div>
@@ -96,7 +96,7 @@ export default {
       }
       return false
     },
-    updateProgress() {
+    updateProgress(migrateLegacy = false) {
       if (!this.keepProgress || !this.canSaveProgress || !this.fileIno || !this.contentLength) return
       const offset = this.getTextOffsetAtScroll()
       this.currentTextOffset = offset
@@ -107,14 +107,28 @@ export default {
         progress,
         displayLabel: this.headingForOffset(offset) || `${Math.round(progress * 100)}%`
       }
-      this.$axios
+      if (migrateLegacy) payload.migrateLegacy = true
+      return this.$axios
         .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
-        .then((record) => this.$emit('ebook-progress', record))
+        .then((record) => {
+          this.$emit('ebook-progress', record)
+          this.$eventBus?.$emit('ebook-progress-updated', record)
+          return record
+        })
         .catch((error) => console.error('MobiReader.updateProgress failed:', error))
     },
     onScroll() {
       clearTimeout(this.scrollTimer)
-      this.scrollTimer = setTimeout(this.updateProgress, 400)
+      this.scrollTimer = setTimeout(() => {
+        this.scrollTimer = null
+        this.updateProgress()
+      }, 400)
+    },
+    flushPendingProgress() {
+      if (!this.scrollTimer) return
+      clearTimeout(this.scrollTimer)
+      this.scrollTimer = null
+      return this.updateProgress()
     },
     resize() {
       clearTimeout(this.resizeTimer)
@@ -134,48 +148,16 @@ export default {
       doc.head.appendChild(style)
     },
     handleIFrameHeight(iFrame) {
-      const isElement = (obj) => !!(obj && obj.nodeType === 1)
+      const doc = iFrame?.contentDocument
+      if (!doc?.body || !doc.documentElement) return
 
-      var body = iFrame.contentWindow.document.body,
-        html = iFrame.contentWindow.document.documentElement
-      iFrame.height = Math.max(body.scrollHeight, body.offsetHeight, html.clientHeight, html.scrollHeight, html.offsetHeight) * 2
+      doc.documentElement.style.overflow = 'hidden'
+      doc.body.style.overflow = 'hidden'
+      iFrame.style.height = '1px'
 
-      setTimeout(() => {
-        let lastchild = body.lastElementChild
-        let lastEle = body.lastChild
-
-        let itemAs = body.querySelectorAll('a')
-        let itemPs = body.querySelectorAll('p')
-        let lastItemA = itemAs[itemAs.length - 1]
-        let lastItemP = itemPs[itemPs.length - 1]
-        let lastItem
-        if (isElement(lastItemA) && isElement(lastItemP)) {
-          if (lastItemA.clientHeight + lastItemA.offsetTop > lastItemP.clientHeight + lastItemP.offsetTop) {
-            lastItem = lastItemA
-          } else {
-            lastItem = lastItemP
-          }
-        }
-
-        if (!lastchild && !lastItem && !lastEle) return
-        if (lastEle.nodeType === 3 && !lastchild && !lastItem) return
-
-        let nodeHeight = 0
-        if (lastEle.nodeType === 3 && iFrame.contentDocument.createRange) {
-          let range = iFrame.contentDocument.createRange()
-          range.selectNodeContents(lastEle)
-          if (range.getBoundingClientRect) {
-            let rect = range.getBoundingClientRect()
-            if (rect) {
-              nodeHeight = rect.bottom - rect.top
-            }
-          }
-        }
-        var lastChildHeight = isElement(lastchild) ? lastchild.clientHeight + lastchild.offsetTop : 0
-        var lastEleHeight = isElement(lastEle) ? lastEle.clientHeight + lastEle.offsetTop : 0
-        var lastItemHeight = isElement(lastItem) ? lastItem.clientHeight + lastItem.offsetTop : 0
-        iFrame.height = Math.max(lastChildHeight, lastEleHeight, lastItemHeight) + 100 + nodeHeight
-      }, 500)
+      const contentHeight = Math.max(doc.body.scrollHeight, doc.body.offsetHeight, doc.documentElement.scrollHeight, doc.documentElement.offsetHeight)
+      const viewerHeight = this.$refs.viewer?.clientHeight || 0
+      iFrame.style.height = `${Math.max(contentHeight, viewerHeight)}px`
     },
     async initMobi() {
       // Fetch mobi file as blob
@@ -192,23 +174,33 @@ export default {
         let htmlParser = new HtmlParser(new DOMParser().parseFromString(content.outerHTML, 'text/html'))
         var anchoredDoc = htmlParser.getAnchoredDoc()
 
-        let iFrame = this.$refs.iframe
-        iFrame.contentDocument.body.innerHTML = anchoredDoc.documentElement.outerHTML
+        const iFrame = this.$refs.iframe
+        const targetDoc = iFrame.contentDocument
+        targetDoc.head.innerHTML = anchoredDoc.head?.innerHTML || ''
+        targetDoc.body.innerHTML = anchoredDoc.body?.innerHTML || ''
+        for (const attr of Array.from(anchoredDoc.documentElement.attributes || [])) targetDoc.documentElement.setAttribute(attr.name, attr.value)
+        for (const attr of Array.from(anchoredDoc.body?.attributes || [])) targetDoc.body.setAttribute(attr.name, attr.value)
 
         // Add css
-        let style = iFrame.contentDocument.createElement('style')
+        const style = targetDoc.createElement('style')
         style.id = 'default-style'
         style.textContent = defaultCss
-        iFrame.contentDocument.head.appendChild(style)
+        targetDoc.head.appendChild(style)
+        Array.from(targetDoc.images).forEach((image) => {
+          image.addEventListener('load', this.resize, { once: true })
+          image.addEventListener('error', this.resize, { once: true })
+        })
 
         this.handleIFrameHeight(iFrame)
         this.$nextTick(() => {
           const nodes = this.getTextNodes()
           this.contentLength = nodes.reduce((length, node) => length + node.textContent.length, 0)
           const restored = this.restoreTextOffset(this.savedTextOffset)
+          if (!restored && this.ebookProgress) this.$emit('position-rejected')
           this.canSaveProgress = true
           this.$refs.viewer.addEventListener('scroll', this.onScroll, { passive: true })
-          if (restored && this.ebookProgress?.legacy) this.updateProgress()
+          if (restored && this.ebookProgress?.legacy) this.updateProgress(true)
+          this.resize()
         })
       }
       reader.readAsArrayBuffer(buff)
@@ -219,7 +211,7 @@ export default {
     this.initMobi()
   },
   beforeDestroy() {
-    clearTimeout(this.scrollTimer)
+    this.flushPendingProgress()
     clearTimeout(this.resizeTimer)
     window.removeEventListener('resize', this.resize)
     this.$refs.viewer?.removeEventListener('scroll', this.onScroll)

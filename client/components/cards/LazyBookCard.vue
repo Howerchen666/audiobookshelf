@@ -377,7 +377,9 @@ export default {
     },
     ebookProgressRecord() {
       const records = this._libraryItem.ebookProgress || []
-      return [...records].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0] || null
+      const primaryFileIno = this._libraryItem.media?.ebookFile?.ino
+      const primaryProgress = primaryFileIno == null ? null : records.find((progress) => String(progress.fileIno) === String(primaryFileIno))
+      return primaryProgress || [...records].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0] || null
     },
     useEBookProgress() {
       if (this.userProgress?.progress) return false

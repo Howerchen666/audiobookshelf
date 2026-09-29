@@ -837,6 +837,21 @@ class LibraryItem extends Model {
       }
     })
 
+    LibraryItem.addHook('afterUpdate', async (instance) => {
+      if (!instance?.changed('libraryFiles') || !sequelize.models.ebookProgress) return
+      const currentFileInos = new Set((instance.libraryFiles || []).map((file) => String(file.ino)))
+      const removedEbookInos = (instance.previous('libraryFiles') || [])
+        .filter((file) => new LibraryFile(file).isEBookFile && !currentFileInos.has(String(file.ino)))
+        .map((file) => String(file.ino))
+      if (!removedEbookInos.length) return
+      await sequelize.models.ebookProgress.destroy({
+        where: {
+          libraryItemId: instance.id,
+          fileIno: removedEbookInos
+        }
+      })
+    })
+
     LibraryItem.addHook('afterDestroy', async (instance) => {
       if (!instance) return
       const media = await instance.getMedia()

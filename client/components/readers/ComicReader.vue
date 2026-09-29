@@ -158,7 +158,7 @@ export default {
       this.showPageMenu = false
       this.showInfoMenu = !this.showInfoMenu
     },
-    updateProgress() {
+    updateProgress(migrateLegacy = false) {
       if (!this.keepProgress || !this.canSaveProgress || !this.numPages || !this.fileIno) return
       const progress = this.numPages <= 1 ? 0 : (this.page - 1) / (this.numPages - 1)
       const payload = {
@@ -167,9 +167,14 @@ export default {
         progress: Math.max(0, Math.min(1, progress)),
         displayLabel: this.$getString('LabelPaginationPageXOfY', [this.page, this.numPages])
       }
-      this.$axios
+      if (migrateLegacy) payload.migrateLegacy = true
+      return this.$axios
         .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
-        .then((record) => this.$emit('ebook-progress', record))
+        .then((record) => {
+          this.$emit('ebook-progress', record)
+          this.$eventBus?.$emit('ebook-progress-updated', record)
+          return record
+        })
         .catch((error) => console.error('ComicReader.updateProgress failed:', error))
     },
     clickOutside() {
@@ -260,9 +265,10 @@ export default {
         this.loading = false
 
         const restored = this.savedPage > 0 && this.savedPage <= this.numPages
+        if (!restored && this.ebookProgress) this.$emit('position-rejected')
         await this.setPage(restored ? this.savedPage : 1)
         this.canSaveProgress = true
-        if (restored && this.ebookProgress?.legacy) this.updateProgress()
+        if (restored && this.ebookProgress?.legacy) this.updateProgress(true)
         this.loadedFirstPage = true
       } else {
         this.$toast.error('Unable to extract pages')

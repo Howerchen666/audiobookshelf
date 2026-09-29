@@ -807,6 +807,7 @@
   "MessageConfirmRenameTagMergeNote": "Note: This tag already exists so they will be merged.",
   "MessageConfirmRenameTagWarning": "Warning! A similar tag with a different casing already exists \"{0}\".",
   "MessageConfirmResetProgress": "Are you sure you want to reset your progress?",
+  "MessageEbookPositionNotApplicable": "The saved reading position does not apply to this ebook file.",
   "MessageConfirmSendEbookToDevice": "Are you sure you want to send {0} ebook \"{1}\" to device \"{2}\"?",
   "MessageConfirmUnlinkOpenId": "Are you sure you want to unlink this user from OpenID?",
   "MessageDaysListenedInTheLastYear": "{0} days listened in the last year",

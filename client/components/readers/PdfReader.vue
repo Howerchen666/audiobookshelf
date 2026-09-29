@@ -115,7 +115,7 @@ export default {
     zoomOut() {
       this.scale -= 0.1
     },
-    updateProgress() {
+    updateProgress(migrateLegacy = false) {
       if (!this.keepProgress || !this.canSaveProgress || !this.numPages || !this.fileIno) return
       const progress = this.numPages <= 1 ? 0 : (this.page - 1) / (this.numPages - 1)
       const payload = {
@@ -124,9 +124,14 @@ export default {
         progress: Math.max(0, Math.min(1, progress)),
         displayLabel: this.$getString('LabelPaginationPageXOfY', [this.page, this.numPages])
       }
-      this.$axios
+      if (migrateLegacy) payload.migrateLegacy = true
+      return this.$axios
         .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
-        .then((record) => this.$emit('ebook-progress', record))
+        .then((record) => {
+          this.$emit('ebook-progress', record)
+          this.$eventBus?.$emit('ebook-progress-updated', record)
+          return record
+        })
         .catch((error) => console.error('PdfReader.updateProgress failed:', error))
     },
     tryRestorePage() {
@@ -134,8 +139,9 @@ export default {
       this.restorationAttempted = true
       const restored = this.savedPage >= 1 && this.savedPage <= this.numPages
       if (restored) this.page = this.savedPage
+      else if (this.ebookProgress) this.$emit('position-rejected')
       this.canSaveProgress = true
-      if (restored && this.ebookProgress?.legacy) this.updateProgress()
+      if (restored && this.ebookProgress?.legacy) this.updateProgress(true)
     },
     loadedEvt() {
       this.documentLoaded = true

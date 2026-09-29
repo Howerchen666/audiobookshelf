@@ -23,7 +23,7 @@
       </button>
     </div>
 
-    <component v-if="componentName && ebookProgressLoaded" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" :file-ino="ebookFileIno" :ebook-progress="selectedEbookProgress" @ebook-progress="ebookProgressUpdated" @touchstart="touchstart" @touchend="touchend" @hook:mounted="readerMounted" />
+    <component v-if="componentName && ebookProgressLoaded" :key="readerKey" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" :file-ino="ebookFileIno" :ebook-progress="selectedEbookProgress" @ebook-progress="ebookProgressUpdated" @position-rejected="positionRejected" @touchstart="touchstart" @touchend="touchend" @hook:mounted="readerMounted" />
 
     <!-- TOC side nav -->
     <div v-if="tocOpen" class="w-full h-full overflow-y-scroll absolute inset-0 bg-black/20 z-20" @click.stop.prevent="toggleToC"></div>
@@ -247,7 +247,7 @@ export default {
     ebookFile() {
       // ebook file id is passed when reading a supplementary ebook
       if (this.ebookFileId) {
-        return this.selectedLibraryItem.libraryFiles.find((lf) => lf.ino === this.ebookFileId)
+        return (this.selectedLibraryItem.libraryFiles || []).find((lf) => String(lf.ino) === String(this.ebookFileId))
       }
       return this.media.ebookFile
     },
@@ -261,6 +261,9 @@ export default {
     },
     ebookFileIno() {
       return this.ebookFile?.ino ? String(this.ebookFile.ino) : null
+    },
+    readerKey() {
+      return `${this.selectedLibraryItem.id || ''}:${this.ebookFileIno || ''}`
     },
     ebookType() {
       if (this.isMobi) return 'mobi'
@@ -282,7 +285,7 @@ export default {
       return this.ebookFormat == 'cbz' || this.ebookFormat == 'cbr'
     },
     keepProgress() {
-      return this.$store.state.ereaderKeepProgress
+      return this.$store.state.ereaderKeepProgress !== false
     },
     ebookFileId() {
       return this.$store.state.ereaderFileId
@@ -292,12 +295,14 @@ export default {
     }
   },
   methods: {
+    positionRejected() {
+      this.$toast.warning(this.$strings.MessageEbookPositionNotApplicable || 'The saved reading position does not apply to this ebook file.')
+    },
     ebookProgressUpdated(record) {
       const index = this.ebookProgressRecords.findIndex((progress) => String(progress.fileIno) === String(record.fileIno))
       if (index === -1) this.ebookProgressRecords.push(record)
       else this.$set(this.ebookProgressRecords, index, record)
       this.selectedEbookProgress = record
-      this.$eventBus.$emit('ebook-progress-updated', record)
     },
     legacyProgressForSelectedFile() {
       const legacy = this.$store.getters['user/getUserMediaProgress'](this.selectedLibraryItem.id)

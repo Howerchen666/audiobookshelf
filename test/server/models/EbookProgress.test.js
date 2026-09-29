@@ -6,7 +6,7 @@ const path = require('path')
 const { DataTypes, Model, Sequelize } = require('sequelize')
 const EbookProgress = require('../../../server/models/EbookProgress')
 const Logger = require('../../../server/Logger')
-const migration = require('../../../server/migrations/v2.36.1-create-ebook-progresses')
+const migration = require('../../../server/migrations/v2.37.0-create-ebook-progresses')
 
 function initOwnerModels(sequelize) {
   class User extends Model {}
@@ -93,7 +93,7 @@ describe('EbookProgress persistence', () => {
   })
 })
 
-describe('Migration v2.36.1-create-ebook-progresses', () => {
+describe('Migration v2.37.0-create-ebook-progresses', () => {
   it('creates the new table without changing legacy media progress', async () => {
     const sequelize = new Sequelize({ dialect: 'sqlite', storage: ':memory:', logging: false })
     const queryInterface = sequelize.getQueryInterface()

@@ -9,6 +9,8 @@ describe('libraryItemsBookFilters ebook progress', () => {
 
     const collapsed = libraryItemsBookFilters.getCollapseSeriesMediaProgressFilter('not-started')
     expect(collapsed[Op.and][2]['$books.mediaProgresses.ebookProgress$'][Op.or]).to.deep.equal([null, 0])
+    expect(collapsed[Op.and][3].val).to.include('NOT EXISTS')
+    expect(collapsed[Op.and][3].val).to.include('ebookProgresses')
   })
 
   it('adds per-file ebook progress to collapsed-series in-progress filters', () => {
@@ -16,5 +18,9 @@ describe('libraryItemsBookFilters ebook progress', () => {
     expect(collapsed[Op.or]).to.have.length(2)
     expect(collapsed[Op.or][1].val).to.include('ebookProgresses')
     expect(collapsed[Op.or][1].val).to.include('ep.progress > 0 AND ep.progress < 1')
+    expect(collapsed[Op.or][1].val).to.include('emp.isFinished = 1')
+
+    const homePageCollapsed = libraryItemsBookFilters.getCollapseSeriesMediaProgressFilter('in-progress', true)
+    expect(homePageCollapsed[Op.or][1].val).to.include('emp.hideFromContinueListening = 1')
   })
 })
