@@ -112,6 +112,11 @@ class Database {
     return this.models.mediaProgress
   }
 
+  /** @type {typeof import('./models/EbookProgress')} */
+  get ebookProgressModel() {
+    return this.models.ebookProgress
+  }
+
   /** @type {typeof import('./models/Collection')} */
   get collectionModel() {
     return this.models.collection
@@ -330,6 +335,7 @@ class Database {
     require('./models/PodcastEpisode').init(this.sequelize)
     require('./models/LibraryItem').init(this.sequelize)
     require('./models/MediaProgress').init(this.sequelize)
+    require('./models/EbookProgress').init(this.sequelize)
     require('./models/Series').init(this.sequelize)
     require('./models/BookSeries').init(this.sequelize)
     require('./models/Author').init(this.sequelize)

@@ -23,7 +23,7 @@
       <div class="flex items-center justify-center">
         <div :style="{ width: pdfWidth + 'px', height: pdfHeight + 'px' }" class="overflow-auto">
           <div v-if="loadedRatio > 0 && loadedRatio < 1" style="background-color: green; color: white; text-align: center" :style="{ width: loadedRatio * 100 + '%' }">{{ Math.floor(loadedRatio * 100) }}%</div>
-          <pdf v-if="pdfDocInitParams" ref="pdf" class="m-auto z-10 border border-black/20 shadow-md" :src="pdfDocInitParams" :page="page" :rotate="rotate" @progress="progressEvt" @error="error" @num-pages="numPagesLoaded" @link-clicked="page = $event" @loaded="loadedEvt"></pdf>
+          <pdf v-if="pdfDocInitParams" ref="pdf" class="m-auto z-10 border border-black/20 shadow-md" :src="pdfDocInitParams" :page="page" :rotate="rotate" @progress="progressEvt" @error="error" @num-pages="numPagesLoaded" @link-clicked="setPage($event)" @loaded="loadedEvt"></pdf>
         </div>
       </div>
     </div>
@@ -44,7 +44,9 @@ export default {
     },
     playerOpen: Boolean,
     keepProgress: Boolean,
-    fileId: String
+    fileId: String,
+    fileIno: String,
+    ebookProgress: Object
   },
   data() {
     return {
@@ -56,7 +58,10 @@ export default {
       page: 1,
       numPages: 0,
       pdfDocInitParams: null,
-      isRefreshing: false
+      isRefreshing: false,
+      documentLoaded: false,
+      restorationAttempted: false,
+      canSaveProgress: false
     }
   },
   computed: {
@@ -91,16 +96,10 @@ export default {
     canScaleDown() {
       return this.scale > 1
     },
-    userMediaProgress() {
-      if (!this.libraryItemId) return
-      return this.$store.getters['user/getUserMediaProgress'](this.libraryItemId)
-    },
     savedPage() {
-      if (!this.keepProgress) return 0
-
-      // Validate ebookLocation is a number
-      if (!this.userMediaProgress?.ebookLocation || isNaN(this.userMediaProgress.ebookLocation)) return 0
-      return Number(this.userMediaProgress.ebookLocation)
+      if (this.ebookProgress?.positionType !== 'page') return 0
+      const page = Number(this.ebookProgress.positionValue)
+      return Number.isInteger(page) ? page : 0
     },
     ebookUrl() {
       if (this.fileId) {
@@ -117,24 +116,30 @@ export default {
       this.scale -= 0.1
     },
     updateProgress() {
-      if (!this.keepProgress) return
-      if (!this.numPages) {
-        console.error('Num pages not loaded')
-        return
-      }
-
+      if (!this.keepProgress || !this.canSaveProgress || !this.numPages || !this.fileIno) return
+      const progress = this.numPages <= 1 ? 0 : (this.page - 1) / (this.numPages - 1)
       const payload = {
-        ebookLocation: this.page,
-        ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages)))
+        positionType: 'page',
+        positionValue: String(this.page),
+        progress: Math.max(0, Math.min(1, progress)),
+        displayLabel: this.$getString('LabelPaginationPageXOfY', [this.page, this.numPages])
       }
-      this.$axios.$patch(`/api/me/progress/${this.libraryItemId}`, payload, { progress: false }).catch((error) => {
-        console.error('EpubReader.updateProgress failed:', error)
-      })
+      this.$axios
+        .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
+        .then((record) => this.$emit('ebook-progress', record))
+        .catch((error) => console.error('PdfReader.updateProgress failed:', error))
+    },
+    tryRestorePage() {
+      if (this.restorationAttempted || !this.documentLoaded || !this.numPages) return
+      this.restorationAttempted = true
+      const restored = this.savedPage >= 1 && this.savedPage <= this.numPages
+      if (restored) this.page = this.savedPage
+      this.canSaveProgress = true
+      if (restored && this.ebookProgress?.legacy) this.updateProgress()
     },
     loadedEvt() {
-      if (this.savedPage > 0 && this.savedPage <= this.numPages) {
-        this.page = this.savedPage
-      }
+      this.documentLoaded = true
+      this.tryRestorePage()
     },
     progressEvt(progress) {
       this.loadedRatio = progress
@@ -142,6 +147,13 @@ export default {
     numPagesLoaded(e) {
       if (!e) return
       this.numPages = e
+      this.tryRestorePage()
+    },
+    setPage(page) {
+      const nextPage = Number(page)
+      if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > this.numPages) return
+      this.page = nextPage
+      this.updateProgress()
     },
     prev() {
       if (this.page <= 1) return

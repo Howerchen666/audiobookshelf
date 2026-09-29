@@ -1032,6 +1032,7 @@ class LibraryItem extends Model {
       isInvalid: !!this.isInvalid,
       mediaType: this.mediaType,
       media: this.media.toOldJSONMinified(),
+      ebookProgress: this.ebookProgresses?.map((progress) => progress.toJSON()),
       numFiles: this.libraryFiles.length,
       size: this.size
     }

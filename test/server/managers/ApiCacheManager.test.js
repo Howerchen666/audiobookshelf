@@ -107,5 +107,19 @@ describe('ApiCacheManager', () => {
 
       expect(cache.get(key)).to.be.undefined
     })
+
+    it('should recognize ebookProgress returned as an afterUpsert tuple', () => {
+      const personalizedKey = JSON.stringify({ user: 'u', url: '/libraries/abc-123/personalized' })
+      const unrelatedKey = JSON.stringify({ user: 'u', url: '/libraries/abc-123/items' })
+      const cache = new LRUCache({ max: 10 })
+      cache.set(personalizedKey, { body: '[]', headers: {}, statusCode: 200 })
+      cache.set(unrelatedKey, { body: '[]', headers: {}, statusCode: 200 })
+      const manager = new ApiCacheManager(cache)
+
+      manager.clear([{ name: 'ebookProgress' }, true], 'afterUpsert')
+
+      expect(cache.get(personalizedKey)).to.be.undefined
+      expect(cache.get(unrelatedKey)).to.not.be.undefined
+    })
   })
 })

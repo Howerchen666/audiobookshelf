@@ -375,9 +375,13 @@ export default {
     isEBookOnly() {
       return !this.numTracks && this.ebookFormat
     },
+    ebookProgressRecord() {
+      const records = this._libraryItem.ebookProgress || []
+      return [...records].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0] || null
+    },
     useEBookProgress() {
-      if (!this.userProgress || this.userProgress.progress) return false
-      return this.userProgress.ebookProgress > 0
+      if (this.userProgress?.progress) return false
+      return !!this.ebookProgressRecord || (this.userProgress?.ebookProgress > 0)
     },
     seriesProgressPercent() {
       if (!this.libraryItemIdsInSeries.length) return 0
@@ -385,19 +389,22 @@ export default {
       const useEBookProgress = this.useEBookProgress
       this.libraryItemIdsInSeries.forEach((lid) => {
         const progress = this.store.getters['user/getUserMediaProgress'](lid)
-        if (progress) progressPercent += progress.isFinished ? 1 : useEBookProgress ? progress.ebookProgress || 0 : progress.progress || 0
+        if (String(lid) === String(this.libraryItemId) && this.ebookProgressRecord && !progress?.progress) progressPercent += this.ebookProgressRecord.progress
+        else if (progress) progressPercent += progress.isFinished ? 1 : useEBookProgress ? progress.ebookProgress || 0 : progress.progress || 0
       })
       return progressPercent / this.libraryItemIdsInSeries.length
     },
     userProgressPercent() {
-      let progressPercent = this.itemIsFinished ? 1 : this.booksInSeries ? this.seriesProgressPercent : this.useEBookProgress ? this.userProgress?.ebookProgress || 0 : this.userProgress?.progress || 0
+      let progressPercent = this.itemIsFinished ? 1 : this.booksInSeries ? this.seriesProgressPercent : this.useEBookProgress ? this.ebookProgressRecord?.progress ?? this.userProgress?.ebookProgress ?? 0 : this.userProgress?.progress || 0
       return Math.max(Math.min(1, progressPercent), 0)
     },
     userProgressLastUpdated() {
+      if (this.ebookProgressRecord && !this.userProgress?.progress) return new Date(this.ebookProgressRecord.updatedAt).valueOf()
       if (!this.userProgress) return null
       return this.userProgress.lastUpdate
     },
     userProgressStartedDate() {
+      if (this.ebookProgressRecord && !this.userProgress?.progress) return new Date(this.ebookProgressRecord.createdAt).valueOf()
       if (!this.userProgress) return null
       return this.userProgress.startedAt
     },

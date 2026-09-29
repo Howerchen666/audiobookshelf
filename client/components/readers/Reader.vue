@@ -23,7 +23,7 @@
       </button>
     </div>
 
-    <component v-if="componentName" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" @touchstart="touchstart" @touchend="touchend" @hook:mounted="readerMounted" />
+    <component v-if="componentName && ebookProgressLoaded" ref="readerComponent" :is="componentName" :library-item="selectedLibraryItem" :player-open="!!streamLibraryItem" :keep-progress="keepProgress" :file-id="ebookFileId" :file-ino="ebookFileIno" :ebook-progress="selectedEbookProgress" @ebook-progress="ebookProgressUpdated" @touchstart="touchstart" @touchend="touchend" @hook:mounted="readerMounted" />
 
     <!-- TOC side nav -->
     <div v-if="tocOpen" class="w-full h-full overflow-y-scroll absolute inset-0 bg-black/20 z-20" @click.stop.prevent="toggleToC"></div>
@@ -136,6 +136,9 @@ export default {
       searchQuery: '',
       tocOpen: false,
       showSettings: false,
+      ebookProgressRecords: [],
+      selectedEbookProgress: null,
+      ebookProgressLoaded: false,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -256,6 +259,9 @@ export default {
       }
       return this.ebookFile.ebookFormat
     },
+    ebookFileIno() {
+      return this.ebookFile?.ino ? String(this.ebookFile.ino) : null
+    },
     ebookType() {
       if (this.isMobi) return 'mobi'
       else if (this.isEpub) return 'epub'
@@ -286,6 +292,66 @@ export default {
     }
   },
   methods: {
+    ebookProgressUpdated(record) {
+      const index = this.ebookProgressRecords.findIndex((progress) => String(progress.fileIno) === String(record.fileIno))
+      if (index === -1) this.ebookProgressRecords.push(record)
+      else this.$set(this.ebookProgressRecords, index, record)
+      this.selectedEbookProgress = record
+      this.$eventBus.$emit('ebook-progress-updated', record)
+    },
+    legacyProgressForSelectedFile() {
+      const legacy = this.$store.getters['user/getUserMediaProgress'](this.selectedLibraryItem.id)
+      if (!legacy?.ebookLocation || !this.ebookFileIno) return null
+      const value = String(legacy.ebookLocation)
+      const positionType = value.startsWith('epubcfi(') ? 'epub-cfi' : !isNaN(value) && value.trim() !== '' ? 'page' : null
+      if (!positionType) return null
+
+      const compatibleFiles = (this.selectedLibraryItem.libraryFiles || []).filter((file) => {
+        if (file.fileType !== 'ebook') return false
+        const format = file.metadata.ext.toLowerCase().slice(1)
+        return positionType === 'epub-cfi' ? format === 'epub' : ['pdf', 'cbz', 'cbr'].includes(format)
+      })
+      if (!compatibleFiles.some((file) => String(file.ino) === this.ebookFileIno)) return null
+      return {
+        legacy: true,
+        ambiguous: compatibleFiles.length > 1,
+        fileIno: this.ebookFileIno,
+        positionType,
+        positionValue: value,
+        progress: Number(legacy.ebookProgress) || 0,
+        displayLabel: `${Math.round((Number(legacy.ebookProgress) || 0) * 100)}%`
+      }
+    },
+    confirmLegacyAssignment() {
+      return new Promise((resolve) => {
+        this.$store.commit('globals/setConfirmPrompt', {
+          message: `Use the previous reading position for ${this.ebookFile.metadata.filename}?`,
+          type: 'yesNo',
+          callback: resolve
+        })
+      })
+    },
+    async loadEbookProgress() {
+      this.ebookProgressLoaded = false
+      this.ebookProgressRecords = []
+      this.selectedEbookProgress = null
+      if (!this.selectedLibraryItem.id || !this.ebookFileIno) {
+        this.ebookProgressLoaded = true
+        return
+      }
+      try {
+        const response = await this.$axios.$get(`/api/me/ebook-progress/${this.selectedLibraryItem.id}`)
+        this.ebookProgressRecords = response.ebookProgress || []
+        this.selectedEbookProgress = this.ebookProgressRecords.find((progress) => String(progress.fileIno) === this.ebookFileIno) || null
+        if (!this.selectedEbookProgress) {
+          const legacyProgress = this.legacyProgressForSelectedFile()
+          if (legacyProgress && (!legacyProgress.ambiguous || (await this.confirmLegacyAssignment()))) this.selectedEbookProgress = legacyProgress
+        }
+      } catch (error) {
+        console.error('Reader.loadEbookProgress failed:', error)
+      }
+      this.ebookProgressLoaded = true
+    },
     goToChapter(uri) {
       this.toggleToC()
       this.$refs.readerComponent.goToChapter(uri)
@@ -406,6 +472,7 @@ export default {
     },
     init() {
       this.registerListeners()
+      this.loadEbookProgress()
     },
     close() {
       this.unregisterListeners()

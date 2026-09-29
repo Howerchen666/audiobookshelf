@@ -2,6 +2,7 @@
   <tr>
     <td class="px-4">
       {{ showFullPath ? file.metadata.path : file.metadata.relPath }} <ui-tooltip :text="$strings.LabelPrimaryEbook" class="inline-block"><span v-if="isPrimary" class="material-symbols text-success align-text-bottom">check_circle</span></ui-tooltip>
+      <p v-if="ebookProgress" class="text-xs text-gray-300">{{ ebookProgress.displayLabel || Math.round(ebookProgress.progress * 100) + '%' }}</p>
     </td>
     <td>
       {{ $bytesPretty(file.metadata.size) }}
@@ -23,7 +24,8 @@ export default {
     file: {
       type: Object,
       default: () => {}
-    }
+    },
+    ebookProgress: Object
   },
   data() {
     return {
@@ -57,6 +59,7 @@ export default {
     },
     contextMenuItems() {
       const items = []
+      if (this.ebookProgress) items.push({ text: this.$strings.ButtonReset || 'Reset', action: 'resetProgress' })
       if (this.userCanUpdate && !this.libraryIsAudiobooksOnly) {
         items.push({
           text: this.isPrimary ? this.$strings.LabelSetEbookAsSupplementary : this.$strings.LabelSetEbookAsPrimary,
@@ -83,12 +86,25 @@ export default {
       this.$emit('read', this.file.ino)
     },
     contextMenuAction({ action }) {
-      if (action === 'delete') {
+      if (action === 'resetProgress') {
+        this.resetProgress()
+      } else if (action === 'delete') {
         this.deleteLibraryFile()
       } else if (action === 'download') {
         this.downloadLibraryFile()
       } else if (action === 'updateStatus') {
         this.updateEbookStatus()
+      }
+    },
+    async resetProgress() {
+      this.processing = true
+      try {
+        await this.$axios.$delete(`/api/me/ebook-progress/${this.libraryItemId}/${this.file.ino}`)
+        this.$emit('progress-deleted', this.file.ino)
+      } catch (error) {
+        console.error('Failed to reset ebook progress', error)
+      } finally {
+        this.processing = false
       }
     },
     updateEbookStatus() {

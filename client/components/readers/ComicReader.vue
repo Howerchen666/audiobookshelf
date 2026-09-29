@@ -76,7 +76,9 @@ export default {
     },
     playerOpen: Boolean,
     keepProgress: Boolean,
-    fileId: String
+    fileId: String,
+    fileIno: String,
+    ebookProgress: Object
   },
   data() {
     return {
@@ -91,6 +93,7 @@ export default {
       showInfoMenu: false,
       loadTimeout: null,
       loadedFirstPage: false,
+      canSaveProgress: false,
       comicMetadata: null,
       scale: 80
     }
@@ -122,16 +125,10 @@ export default {
     canGoPrev() {
       return this.page > 1
     },
-    userMediaProgress() {
-      if (!this.libraryItemId) return
-      return this.$store.getters['user/getUserMediaProgress'](this.libraryItemId)
-    },
     savedPage() {
-      if (!this.keepProgress) return 0
-
-      // Validate ebookLocation is a number
-      if (!this.userMediaProgress?.ebookLocation || isNaN(this.userMediaProgress.ebookLocation)) return 0
-      return Number(this.userMediaProgress.ebookLocation)
+      if (this.ebookProgress?.positionType !== 'page') return 0
+      const page = Number(this.ebookProgress.positionValue)
+      return Number.isInteger(page) ? page : 0
     },
     cleanedPageNames() {
       return (
@@ -162,23 +159,18 @@ export default {
       this.showInfoMenu = !this.showInfoMenu
     },
     updateProgress() {
-      if (!this.keepProgress) return
-
-      if (!this.numPages) {
-        console.error('Num pages not loaded')
-        return
-      }
-      if (this.savedPage === this.page) {
-        return
-      }
-
+      if (!this.keepProgress || !this.canSaveProgress || !this.numPages || !this.fileIno) return
+      const progress = this.numPages <= 1 ? 0 : (this.page - 1) / (this.numPages - 1)
       const payload = {
-        ebookLocation: this.page,
-        ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages)))
+        positionType: 'page',
+        positionValue: String(this.page),
+        progress: Math.max(0, Math.min(1, progress)),
+        displayLabel: this.$getString('LabelPaginationPageXOfY', [this.page, this.numPages])
       }
-      this.$axios.$patch(`/api/me/progress/${this.libraryItemId}`, payload, { progress: false }).catch((error) => {
-        console.error('ComicReader.updateProgress failed:', error)
-      })
+      this.$axios
+        .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
+        .then((record) => this.$emit('ebook-progress', record))
+        .catch((error) => console.error('ComicReader.updateProgress failed:', error))
     },
     clickOutside() {
       if (this.showPageMenu) this.showPageMenu = false
@@ -267,8 +259,10 @@ export default {
       if (this.pages.length) {
         this.loading = false
 
-        const startPage = this.savedPage > 0 && this.savedPage <= this.numPages ? this.savedPage : 1
-        await this.setPage(startPage)
+        const restored = this.savedPage > 0 && this.savedPage <= this.numPages
+        await this.setPage(restored ? this.savedPage : 1)
+        this.canSaveProgress = true
+        if (restored && this.ebookProgress?.legacy) this.updateProgress()
         this.loadedFirstPage = true
       } else {
         this.$toast.error('Unable to extract pages')

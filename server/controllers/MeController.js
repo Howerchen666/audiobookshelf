@@ -15,6 +15,30 @@ const parseUserAgent = require('../utils/parsers/parseUserAgent')
  * @typedef {Request & RequestUserObject} RequestWithUser
  */
 
+async function getAuthorizedEbookItem(req, res, requireFile = false) {
+  const libraryItem = await Database.libraryItemModel.getExpandedById(req.params.libraryItemId)
+  if (!libraryItem) {
+    res.sendStatus(404)
+    return null
+  }
+  if (!req.user.checkCanAccessLibraryItem(libraryItem)) {
+    res.sendStatus(403)
+    return null
+  }
+  if (!libraryItem.isBook) {
+    res.status(400).send('Library item is not a book')
+    return null
+  }
+  if (requireFile) {
+    const ebookFile = libraryItem.getLibraryFileWithIno(req.params.fileIno)
+    if (!ebookFile?.isEBookFile) {
+      res.status(400).send('Invalid ebook file id')
+      return null
+    }
+  }
+  return libraryItem
+}
+
 class MeController {
   constructor() {}
 
@@ -112,6 +136,51 @@ class MeController {
   getAllMediaProgress(req, res) {
     const mediaProgress = req.user.mediaProgresses?.map((mp) => mp.getOldMediaProgress()) || []
     res.json({ mediaProgress })
+  }
+
+  async getEbookProgress(req, res) {
+    const libraryItem = await getAuthorizedEbookItem(req, res)
+    if (!libraryItem) return
+
+    const ebookProgress = await Database.ebookProgressModel.findAll({
+      where: { userId: req.user.id, libraryItemId: libraryItem.id },
+      order: [['updatedAt', 'DESC']]
+    })
+    res.json({ ebookProgress })
+  }
+
+  async updateEbookProgress(req, res) {
+    const libraryItem = await getAuthorizedEbookItem(req, res, true)
+    if (!libraryItem) return
+
+    const { positionType, positionValue, progress, displayLabel } = req.body || {}
+    if (typeof positionType !== 'string' || !positionType || typeof positionValue !== 'string' || !positionValue || typeof displayLabel !== 'string' || !displayLabel || typeof progress !== 'number' || !Number.isFinite(progress) || progress < 0 || progress > 1) {
+      return res.status(400).send('Invalid ebook progress payload')
+    }
+
+    const [ebookProgress] = await Database.ebookProgressModel.upsert(
+      {
+        userId: req.user.id,
+        libraryItemId: libraryItem.id,
+        fileIno: String(req.params.fileIno),
+        positionType,
+        positionValue,
+        progress,
+        displayLabel
+      },
+      { returning: true }
+    )
+    res.json(ebookProgress)
+  }
+
+  async deleteEbookProgress(req, res) {
+    const libraryItem = await getAuthorizedEbookItem(req, res, true)
+    if (!libraryItem) return
+
+    await Database.ebookProgressModel.destroy({
+      where: { userId: req.user.id, libraryItemId: libraryItem.id, fileIno: String(req.params.fileIno) }
+    })
+    res.sendStatus(200)
   }
 
   /**
@@ -486,34 +555,56 @@ class MeController {
     const limit = !isNaN(req.query.limit) ? Number(req.query.limit) || 25 : 25
 
     const mediaProgressesInProgress = req.user.mediaProgresses.filter((mp) => !mp.isFinished && (mp.currentTime > 0 || mp.ebookProgress > 0))
+    const ebookProgressesInProgress = await Database.ebookProgressModel.findAll({
+      where: { userId: req.user.id, progress: { [Op.gt]: 0, [Op.lt]: 1 } }
+    })
 
-    const libraryItemsIds = [...new Set(mediaProgressesInProgress.map((mp) => mp.extraData?.libraryItemId).filter((id) => id))]
+    const libraryItemsIds = [
+      ...new Set([...mediaProgressesInProgress.map((mp) => mp.extraData?.libraryItemId), ...ebookProgressesInProgress.map((progress) => progress.libraryItemId)].filter((id) => id))
+    ]
     const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({ id: libraryItemsIds })
-
+    const bookItemsInProgress = new Map()
     let itemsInProgress = []
 
     for (const mediaProgress of mediaProgressesInProgress) {
       const oldMediaProgress = mediaProgress.getOldMediaProgress()
       const libraryItem = libraryItems.find((li) => li.id === oldMediaProgress.libraryItemId)
-      if (libraryItem) {
-        if (oldMediaProgress.episodeId && libraryItem.isPodcast) {
-          const episode = libraryItem.media.podcastEpisodes.find((ep) => ep.id === oldMediaProgress.episodeId)
-          if (episode) {
-            const libraryItemWithEpisode = {
-              ...libraryItem.toOldJSONMinified(),
-              recentEpisode: episode.toOldJSON(libraryItem.id),
-              progressLastUpdate: oldMediaProgress.lastUpdate
-            }
-            itemsInProgress.push(libraryItemWithEpisode)
-          }
-        } else if (!oldMediaProgress.episodeId) {
+      if (!libraryItem || !req.user.checkCanAccessLibraryItem(libraryItem)) continue
+      if (oldMediaProgress.episodeId && libraryItem.isPodcast) {
+        const episode = libraryItem.media.podcastEpisodes.find((ep) => ep.id === oldMediaProgress.episodeId)
+        if (episode) {
           itemsInProgress.push({
             ...libraryItem.toOldJSONMinified(),
+            recentEpisode: episode.toOldJSON(libraryItem.id),
             progressLastUpdate: oldMediaProgress.lastUpdate
           })
         }
+      } else if (!oldMediaProgress.episodeId) {
+        bookItemsInProgress.set(libraryItem.id, {
+          ...libraryItem.toOldJSONMinified(),
+          progressLastUpdate: oldMediaProgress.lastUpdate
+        })
       }
     }
+
+    for (const ebookProgress of ebookProgressesInProgress) {
+      const libraryItem = libraryItems.find((item) => item.id === ebookProgress.libraryItemId)
+      if (!libraryItem || !req.user.checkCanAccessLibraryItem(libraryItem)) continue
+      const existing = bookItemsInProgress.get(libraryItem.id)
+      const progressLastUpdate = ebookProgress.updatedAt.valueOf()
+      if (existing) {
+        existing.progressLastUpdate = Math.max(existing.progressLastUpdate, progressLastUpdate)
+        if (!existing.ebookProgress) existing.ebookProgress = []
+        existing.ebookProgress.push(ebookProgress.toJSON())
+      } else {
+        bookItemsInProgress.set(libraryItem.id, {
+          ...libraryItem.toOldJSONMinified(),
+          ebookProgress: [ebookProgress.toJSON()],
+          progressLastUpdate
+        })
+      }
+    }
+    itemsInProgress.push(...bookItemsInProgress.values())
 
     itemsInProgress = sort(itemsInProgress)
       .desc((li) => li.progressLastUpdate)

@@ -23,7 +23,7 @@
             <th v-if="showMoreColumn" class="text-center w-16"></th>
           </tr>
           <template v-for="file in ebookFiles">
-            <tables-ebook-files-table-row :key="file.path" :libraryItemId="libraryItemId" :showFullPath="showFullPath" :file="file" @read="readEbook" />
+            <tables-ebook-files-table-row :key="file.path" :libraryItemId="libraryItemId" :showFullPath="showFullPath" :file="file" :ebook-progress="progressForFile(file.ino)" @read="readEbook" @progress-deleted="loadEbookProgress" />
           </template>
         </table>
       </div>
@@ -42,7 +42,8 @@ export default {
   data() {
     return {
       showFiles: false,
-      showFullPath: false
+      showFullPath: false,
+      ebookProgress: []
     }
   },
   computed: {
@@ -65,28 +66,44 @@ export default {
       return this.$store.getters['libraries/getLibraryIsAudiobooksOnly']
     },
     showMoreColumn() {
-      return this.userCanDelete || this.userCanDownload || (this.userCanUpdate && !this.libraryIsAudiobooksOnly)
+      return this.ebookProgress.length > 0 || this.userCanDelete || this.userCanDownload || (this.userCanUpdate && !this.libraryIsAudiobooksOnly)
     },
     ebookFiles() {
       return (this.libraryItem.libraryFiles || []).filter((lf) => lf.fileType === 'ebook')
     }
   },
   methods: {
+    progressForFile(fileIno) {
+      return this.ebookProgress.find((progress) => String(progress.fileIno) === String(fileIno)) || null
+    },
+    async loadEbookProgress() {
+      try {
+        const response = await this.$axios.$get(`/api/me/ebook-progress/${this.libraryItemId}`)
+        this.ebookProgress = response.ebookProgress || []
+      } catch (error) {
+        console.error('EbookFilesTable.loadEbookProgress failed:', error)
+      }
+    },
     toggleFullPath() {
       this.showFullPath = !this.showFullPath
       localStorage.setItem('showFullPath', this.showFullPath ? 1 : 0)
     },
     readEbook(fileIno) {
-      this.$store.commit('showEReader', { libraryItem: this.libraryItem, keepProgress: false, fileId: fileIno })
+      this.$store.commit('showEReader', { libraryItem: this.libraryItem, keepProgress: true, fileId: fileIno })
     },
     clickBar() {
       this.showFiles = !this.showFiles
     }
   },
   mounted() {
+    this.loadEbookProgress()
+    this.$eventBus.$on('ebook-progress-updated', this.loadEbookProgress)
     if (this.userIsAdmin) {
       this.showFullPath = !!Number(localStorage.getItem('showFullPath') || 0)
     }
+  },
+  beforeDestroy() {
+    this.$eventBus.$off('ebook-progress-updated', this.loadEbookProgress)
   }
 }
 </script>

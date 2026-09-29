@@ -71,6 +71,7 @@
           <div v-if="!isPodcast && progressPercent > 0" class="px-4 py-2 mt-4 bg-primary text-sm font-semibold rounded-md text-gray-100 relative max-w-max mx-auto md:mx-0" :class="resettingProgress ? 'opacity-25' : ''">
             <p v-if="progressPercent < 1" class="leading-6">{{ $strings.LabelYourProgress }}: {{ Math.round(progressPercent * 100) }}%</p>
             <p v-else class="text-xs">{{ $strings.LabelFinished }} {{ $formatDate(userProgressFinishedAt, dateFormat) }}</p>
+            <p v-if="progressPercent < 1 && useEBookProgress && primaryEbookProgress" class="text-gray-200 text-xs">{{ primaryEbookProgress.displayLabel }}</p>
             <p v-if="progressPercent < 1 && !useEBookProgress" class="text-gray-200 text-xs">{{ $getString('LabelTimeRemaining', [$elapsedPretty(userTimeRemaining)]) }}</p>
             <p class="text-gray-400 text-xs pt-1">{{ $strings.LabelStarted }} {{ $formatDate(userProgressStartedAt, dateFormat) }}</p>
 
@@ -165,8 +166,10 @@ export default {
     if (store.state.libraries.currentLibraryId !== item.libraryId || !store.state.libraries.filterData) {
       await store.dispatch('libraries/fetch', item.libraryId)
     }
+    const ebookProgressResponse = item.mediaType === 'book' ? await app.$axios.$get(`/api/me/ebook-progress/${item.id}`).catch(() => ({ ebookProgress: [] })) : { ebookProgress: [] }
     return {
       libraryItem: item,
+      ebookProgress: ebookProgressResponse.ebookProgress || [],
       rssFeed: item.rssFeed || null,
       mediaItemShare: item.mediaItemShare || null
     }
@@ -320,18 +323,25 @@ export default {
       const duration = this.userMediaProgress.duration || this.duration
       return duration - this.userMediaProgress.currentTime
     },
+    primaryEbookProgress() {
+      if (!this.ebookFile?.ino) return null
+      return this.ebookProgress.find((progress) => String(progress.fileIno) === String(this.ebookFile.ino)) || null
+    },
     useEBookProgress() {
-      if (!this.userMediaProgress || this.userMediaProgress.progress) return false
-      return this.userMediaProgress.ebookProgress > 0
+      if (this.userMediaProgress?.progress) return false
+      return !!this.primaryEbookProgress || (this.userMediaProgress?.ebookProgress > 0)
     },
     progressPercent() {
+      if (this.primaryEbookProgress && !this.userMediaProgress?.progress) return Math.max(Math.min(1, this.primaryEbookProgress.progress), 0)
       if (this.useEBookProgress) return Math.max(Math.min(1, this.userMediaProgress.ebookProgress), 0)
       return this.userMediaProgress ? Math.max(Math.min(1, this.userMediaProgress.progress), 0) : 0
     },
     userProgressStartedAt() {
+      if (this.primaryEbookProgress && !this.userMediaProgress?.progress) return new Date(this.primaryEbookProgress.createdAt).valueOf()
       return this.userMediaProgress ? this.userMediaProgress.startedAt : 0
     },
     userProgressFinishedAt() {
+      if (this.primaryEbookProgress && !this.userMediaProgress?.progress) return new Date(this.primaryEbookProgress.updatedAt).valueOf()
       return this.userMediaProgress ? this.userMediaProgress.finishedAt : 0
     },
     streamLibraryItem() {
@@ -592,6 +602,12 @@ export default {
       if (!this.$refs.description) return
       this.isDescriptionClamped = this.$refs.description.scrollHeight > this.$refs.description.clientHeight
     },
+    ebookProgressUpdated(record) {
+      if (record.libraryItemId !== this.libraryItemId) return
+      const index = this.ebookProgress.findIndex((progress) => progress.id === record.id)
+      if (index === -1) this.ebookProgress.push(record)
+      else this.$set(this.ebookProgress, index, record)
+    },
     libraryItemUpdated(libraryItem) {
       if (libraryItem.id === this.libraryItemId) {
         console.log('Item was updated', libraryItem)
@@ -600,7 +616,7 @@ export default {
       }
     },
     clearProgressClick() {
-      if (!this.userMediaProgress) return
+      if (!this.userMediaProgress && !this.primaryEbookProgress) return
 
       const payload = {
         message: this.$strings.MessageConfirmResetProgress,
@@ -615,9 +631,15 @@ export default {
     },
     clearProgress() {
       this.resettingProgress = true
+      const deleteUrl = this.primaryEbookProgress && !this.userMediaProgress?.progress
+        ? `/api/me/ebook-progress/${this.libraryItemId}/${this.primaryEbookProgress.fileIno}`
+        : `/api/me/progress/${this.userMediaProgress.id}`
       this.$axios
-        .$delete(`/api/me/progress/${this.userMediaProgress.id}`)
+        .$delete(deleteUrl)
         .then(() => {
+          if (this.primaryEbookProgress && !this.userMediaProgress?.progress) {
+            this.ebookProgress = this.ebookProgress.filter((progress) => progress.id !== this.primaryEbookProgress.id)
+          }
           console.log('Progress reset complete')
         })
         .catch((error) => {
@@ -781,6 +803,7 @@ export default {
   },
   mounted() {
     this.checkDescriptionClamped()
+    this.$eventBus.$on('ebook-progress-updated', this.ebookProgressUpdated)
 
     this.episodeDownloadsQueued = this.libraryItem.episodeDownloadsQueued || []
     this.episodesDownloading = this.libraryItem.episodesDownloading || []
@@ -797,6 +820,7 @@ export default {
     this.$root.socket.on('episode_download_queue_cleared', this.episodeDownloadQueueCleared)
   },
   beforeDestroy() {
+    this.$eventBus.$off('ebook-progress-updated', this.ebookProgressUpdated)
     this.$eventBus.$off(`${this.libraryItem.id}_updated`, this.libraryItemUpdated)
     this.$root.socket.off('item_updated', this.libraryItemUpdated)
     this.$root.socket.off('rss_feed_open', this.rssFeedOpen)

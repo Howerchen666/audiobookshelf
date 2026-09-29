@@ -66,29 +66,29 @@ module.exports = {
           '$books.mediaProgresses.isFinished$': {
             [Sequelize.Op.or]: [null, false]
           }
+        },
+        {
+          '$books.mediaProgresses.ebookProgress$': {
+            [Sequelize.Op.or]: [null, 0]
+          }
         }
       ]
     } else if (value === 'finished') {
       mediaWhere['$books.mediaProgresses.isFinished$'] = true
     } else if (value === 'in-progress') {
-      mediaWhere[Sequelize.Op.and] = [
+      mediaWhere[Sequelize.Op.or] = [
         {
-          [Sequelize.Op.or]: [
+          [Sequelize.Op.and]: [
             {
-              '$books.mediaProgresses.currentTime$': {
-                [Sequelize.Op.gt]: 0
-              }
+              [Sequelize.Op.or]: [
+                { '$books.mediaProgresses.currentTime$': { [Sequelize.Op.gt]: 0 } },
+                { '$books.mediaProgresses.ebookProgress$': { [Sequelize.Op.gt]: 0 } }
+              ]
             },
-            {
-              '$books.mediaProgresses.ebookProgress$': {
-                [Sequelize.Op.gt]: 0
-              }
-            }
+            { '$books.mediaProgresses.isFinished$': false }
           ]
         },
-        {
-          '$books.mediaProgresses.isFinished$': false
-        }
+        Sequelize.literal('EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = "books->libraryItem".id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1)')
       ]
     }
     return mediaWhere
@@ -121,6 +121,11 @@ module.exports = {
           {
             '$mediaProgresses.isFinished$': {
               [Sequelize.Op.or]: [null, false]
+            }
+          },
+          {
+            '$mediaProgresses.ebookProgress$': {
+              [Sequelize.Op.or]: [null, 0]
             }
           }
         ]
@@ -289,9 +294,9 @@ module.exports = {
       const nullDir = sortDesc ? 'DESC NULLS FIRST' : 'ASC NULLS LAST'
       return [[Sequelize.literal(`CAST(\`series.bookSeries.sequence\` AS FLOAT) ${nullDir}`)]]
     } else if (sortBy === 'progress') {
-      return [[Sequelize.literal(`mediaProgresses.updatedAt ${dir} NULLS LAST`)]]
+      return [[Sequelize.literal(`MAX(COALESCE(mediaProgresses.updatedAt, 0), COALESCE((SELECT max(ep.updatedAt) FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :userId), 0)) ${dir}`)]]
     } else if (sortBy === 'progress.createdAt') {
-      return [[Sequelize.literal(`mediaProgresses.createdAt ${dir} NULLS LAST`)]]
+      return [[Sequelize.literal(`MIN(COALESCE(mediaProgresses.createdAt, '9999'), COALESCE((SELECT min(ep.createdAt) FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :userId), '9999')) ${dir}`)]]
     } else if (sortBy === 'progress.finishedAt') {
       return [[Sequelize.literal(`mediaProgresses.finishedAt ${dir} NULLS LAST`)]]
     } else if (sortBy === 'random') {
@@ -440,6 +445,16 @@ module.exports = {
     const libraryItemIncludes = []
     const bookIncludes = []
 
+    if (user) {
+      libraryItemIncludes.push({
+        model: Database.ebookProgressModel,
+        attributes: ['id', 'fileIno', 'positionType', 'positionValue', 'progress', 'displayLabel', 'updatedAt', 'createdAt'],
+        where: { userId: user.id },
+        required: false,
+        separate: true
+      })
+    }
+
     if (filterGroup === 'feed-open' || includeRSSFeed) {
       const rssFeedRequired = filterGroup === 'feed-open'
       libraryItemIncludes.push({
@@ -549,8 +564,23 @@ module.exports = {
     let { mediaWhere, replacements } = this.getMediaGroupQuery(filterGroup, filterValue)
     let bookWhere = Array.isArray(mediaWhere) ? mediaWhere : [mediaWhere]
 
+    const ebookInProgress = Sequelize.literal(
+      'EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :ebookProgressUserId AND ep.progress > 0 AND ep.progress < 1)'
+    )
+    if (user && filterGroup === 'progress' && filterValue === 'in-progress') {
+      bookWhere = [{ [Sequelize.Op.or]: [mediaWhere, ebookInProgress] }]
+      replacements.ebookProgressUserId = user.id
+    } else if (user && filterGroup === 'progress' && filterValue === 'ebook-in-progress') {
+      bookWhere = [Sequelize.where(Sequelize.fn('json_array_length', Sequelize.col('audioFiles')), 0), { [Sequelize.Op.or]: [{ [Sequelize.Op.and]: [mediaWhere[1], mediaWhere[2]] }, ebookInProgress] }]
+      replacements.ebookProgressUserId = user.id
+    } else if (user && filterGroup === 'progress' && filterValue === 'not-started') {
+      bookWhere.push(Sequelize.literal('NOT EXISTS (SELECT 1 FROM ebookProgresses ep WHERE ep.libraryItemId = libraryItem.id AND ep.userId = :ebookProgressUserId AND ep.progress > 0)'))
+      replacements.ebookProgressUserId = user.id
+    }
+
     // User permissions
     const userPermissionBookWhere = this.getUserPermissionBookWhereQuery(user)
+    if (user && ['progress', 'progress.createdAt'].includes(sortBy)) replacements.userId = user.id
     replacements = { ...replacements, ...userPermissionBookWhere.replacements }
     bookWhere.push(...userPermissionBookWhere.bookWhere)
 

@@ -30,7 +30,9 @@ export default {
     },
     playerOpen: Boolean,
     keepProgress: Boolean,
-    fileId: String
+    fileId: String,
+    fileIno: String,
+    ebookProgress: Object
   },
   data() {
     return {
@@ -41,6 +43,7 @@ export default {
       /** @type {ePub.Rendition} */
       rendition: null,
       chapters: [],
+      canSaveProgress: false,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -70,16 +73,10 @@ export default {
     hasNext() {
       return !this.rendition?.location?.atEnd
     },
-    userMediaProgress() {
-      if (!this.libraryItemId) return
-      return this.$store.getters['user/getUserMediaProgress'](this.libraryItemId)
-    },
     savedEbookLocation() {
-      if (!this.keepProgress) return null
-      if (!this.userMediaProgress?.ebookLocation) return null
-      // Validate ebookLocation is an epubcfi
-      if (!String(this.userMediaProgress.ebookLocation).startsWith('epubcfi')) return null
-      return this.userMediaProgress.ebookLocation
+      if (this.ebookProgress?.positionType !== 'epub-cfi') return null
+      const value = String(this.ebookProgress.positionValue || '')
+      return /^epubcfi\(.+\)$/.test(value) ? value : null
     },
     localStorageLocationsKey() {
       return `ebookLocations-${this.libraryItemId}`
@@ -199,16 +196,12 @@ export default {
         return rtl ? this.prev() : this.next()
       }
     },
-    /**
-     * @param {object} payload
-     * @param {string} payload.ebookLocation - CFI of the current location
-     * @param {string} payload.ebookProgress - eBook Progress Percentage
-     */
     updateProgress(payload) {
-      if (!this.keepProgress) return
-      this.$axios.$patch(`/api/me/progress/${this.libraryItemId}`, payload, { progress: false }).catch((error) => {
-        console.error('EpubReader.updateProgress failed:', error)
-      })
+      if (!this.keepProgress || !this.canSaveProgress || !this.fileIno) return
+      this.$axios
+        .$put(`/api/me/ebook-progress/${this.libraryItemId}/${this.fileIno}`, payload, { progress: false })
+        .then((record) => this.$emit('ebook-progress', record))
+        .catch((error) => console.error('EpubReader.updateProgress failed:', error))
     },
     getAllEbookLocationData() {
       const locations = []
@@ -297,20 +290,15 @@ export default {
     },
     /** @param {string} location - CFI of the new location */
     relocated(location) {
-      if (this.savedEbookLocation === location.start.cfi) {
-        return
-      }
-
-      if (location.end.percentage) {
-        this.updateProgress({
-          ebookLocation: location.start.cfi,
-          ebookProgress: location.end.percentage
-        })
-      } else {
-        this.updateProgress({
-          ebookLocation: location.start.cfi
-        })
-      }
+      if (!location?.start?.cfi) return
+      const progress = Math.max(0, Math.min(1, Number(location.end?.percentage) || 0))
+      const chapter = this.findChapterFromPosition(this.flattenChapters(this.chapters), progress)
+      this.updateProgress({
+        positionType: 'epub-cfi',
+        positionValue: location.start.cfi,
+        progress,
+        displayLabel: chapter?.title || `${Math.round(progress * 100)}%`
+      })
     },
     initEpub() {
       /** @type {EpubReader} */
@@ -347,17 +335,12 @@ export default {
         flow: 'paginated'
       })
 
-      // load saved progress
-      reader.rendition.display(this.savedEbookLocation || reader.book.locations.start)
-
-      reader.rendition.on('rendered', () => {
+       reader.rendition.on('rendered', () => {
         this.applyTheme()
       })
 
       reader.book.ready
-        .then(() => {
-          // set up event listeners
-          reader.rendition.on('relocated', reader.relocated)
+        .then(async () => {
           reader.rendition.on('keydown', reader.keyUp)
 
           reader.rendition.on('touchstart', (event) => {
@@ -372,11 +355,27 @@ export default {
           if (savedLocations) {
             reader.book.locations.load(savedLocations)
           } else {
-            reader.book.locations.generate().then(() => {
-              this.checkSaveLocations(reader.book.locations.save())
-            })
+            await reader.book.locations.generate()
+            this.checkSaveLocations(reader.book.locations.save())
           }
-          this.getChapters()
+          await this.getChapters()
+
+          let restored = false
+          if (this.savedEbookLocation) {
+            try {
+              await reader.rendition.display(this.savedEbookLocation)
+              restored = true
+            } catch (error) {
+              console.error('EpubReader failed to restore saved CFI:', error)
+              await reader.rendition.display()
+            }
+          } else {
+            await reader.rendition.display()
+          }
+
+          this.canSaveProgress = true
+          reader.rendition.on('relocated', reader.relocated)
+          if (restored && this.ebookProgress?.legacy) this.relocated(reader.rendition.currentLocation())
         })
         .catch((error) => {
           console.error('EpubReader.initEpub failed:', error)

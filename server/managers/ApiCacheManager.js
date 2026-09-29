@@ -5,9 +5,9 @@ const Database = require('../Database')
 class ApiCacheManager {
   defaultCacheOptions = { max: 1000, maxSize: 10 * 1000 * 1000, sizeCalculation: (item) => item.body.length + JSON.stringify(item.headers).length }
   defaultTtlOptions = { ttl: 30 * 60 * 1000 }
-  highChurnModels = new Set(['session', 'mediaProgress', 'playbackSession', 'device'])
-  modelsInvalidatingPersonalized = new Set(['mediaProgress'])
-  modelsInvalidatingMe = new Set(['session', 'mediaProgress', 'playbackSession', 'device'])
+  highChurnModels = new Set(['session', 'mediaProgress', 'ebookProgress', 'playbackSession', 'device'])
+  modelsInvalidatingPersonalized = new Set(['mediaProgress', 'ebookProgress'])
+  modelsInvalidatingMe = new Set(['session', 'mediaProgress', 'ebookProgress', 'playbackSession', 'device'])
 
   constructor(cache = new LRUCache(this.defaultCacheOptions), ttlOptions = this.defaultTtlOptions) {
     this.cache = cache
@@ -20,6 +20,7 @@ class ApiCacheManager {
   }
 
   getModelName(model) {
+    if (Array.isArray(model)) return this.getModelName(model[0])
     if (typeof model?.name === 'string') return model.name
     if (typeof model?.model?.name === 'string') return model.model.name
     if (typeof model?.constructor?.name === 'string' && model.constructor.name !== 'Object') return model.constructor.name
