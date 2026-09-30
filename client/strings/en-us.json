@@ -1166,5 +1166,16 @@
   "TooltipLockChapter": "Lock chapter (Shift+click for range)",
   "TooltipSubtractOneSecond": "Subtract 1 second",
   "TooltipUnlockAllChapters": "Unlock all chapters",
-  "TooltipUnlockChapter": "Unlock chapter (Shift+click for range)"
+  "TooltipUnlockChapter": "Unlock chapter (Shift+click for range)",
+  "ButtonCustomizeHome": "Customize home",
+  "ButtonHomeShelfMoveUp": "Up",
+  "ButtonHomeShelfMoveDown": "Down",
+  "ButtonHomeShelvesReset": "Reset to defaults",
+  "ButtonHomeShelvesRetry": "Retry",
+  "MessageHomeShelvesHelp": "Choose the rows to show and use Up or Down to change their order. Empty rows are skipped. Newly introduced rows stay hidden in a saved layout until you select them. Reset restores all default rows.",
+  "MessageHomeShelvesLoadFailed": "Could not load home settings. Please retry.",
+  "MessageHomeShelvesSaveFailed": "Could not save home settings. Your changes are still here. Please retry.",
+  "MessageHomeShelvesContentFailed": "Could not load home rows. Please retry.",
+  "MessageHomeShelvesAllHidden": "All home rows are hidden.",
+  "MessageHomeShelvesNoMatches": "Your selected home rows have no matching items."
 }

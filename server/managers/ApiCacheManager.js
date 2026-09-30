@@ -12,6 +12,7 @@ class ApiCacheManager {
   constructor(cache = new LRUCache(this.defaultCacheOptions), ttlOptions = this.defaultTtlOptions) {
     this.cache = cache
     this.ttlOptions = ttlOptions
+    this.generation = 0
   }
 
   init(database = Database) {
@@ -28,6 +29,7 @@ class ApiCacheManager {
   }
 
   clearByUrlPattern(urlPattern) {
+    this.generation++
     let removed = 0
     for (const key of this.cache.keys()) {
       try {
@@ -61,6 +63,7 @@ class ApiCacheManager {
     }
 
     Logger.debug(`[ApiCacheManager] ${modelName}.${hook}: Clearing cache`)
+    this.generation++
     this.cache.clear()
   }
 
@@ -71,6 +74,7 @@ class ApiCacheManager {
     Logger.info(`[ApiCacheManager] Resetting cache`)
 
     this.init()
+    this.generation++
     this.cache.clear()
   }
 
@@ -81,8 +85,8 @@ class ApiCacheManager {
      * @param {import('express').NextFunction} next
      */
     return (req, res, next) => {
-      if (req.query.sort === 'random') {
-        Logger.debug(`[ApiCacheManager] Skipping cache for random sort`)
+      if (req.query.sort === 'random' || /^\/libraries\/[^/]+\/home-shelves\/?(?:\?|$)/.test(req.url)) {
+        Logger.debug(`[ApiCacheManager] Skipping cache for ${req.url}`)
         return next()
       }
 
@@ -97,8 +101,11 @@ class ApiCacheManager {
         res.send(cached.body)
         return
       }
+      const generation = this.generation
       res.originalSend = res.send
       res.send = (body) => {
+        // A save may invalidate the cache while an older GET is still loading.
+        if (generation !== this.generation) return res.originalSend(body)
         Logger.debug(`[ApiCacheManager] Cache miss: ${stringifiedKey}`)
         const cached = { body, headers: res.getHeaders(), statusCode: res.statusCode }
         if (key.url.search(/^\/libraries\/.*?\/personalized/) !== -1) {

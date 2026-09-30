@@ -96,6 +96,7 @@
       <!-- home page -->
       <template v-else-if="isHome">
         <div class="grow" />
+        <slot name="home-actions" />
         <ui-context-menu-dropdown v-if="contextMenuItems.length" :items="contextMenuItems" :menu-width="110" class="ml-2" @action="contextMenuAction" />
       </template>
     </div>
