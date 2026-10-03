@@ -4,7 +4,7 @@ Shared run instructions, verification steps, and student contribution summaries 
 
 ## Run this version
 
-Use Node.js 20 and FFmpeg. Clone the team repository if needed:
+Clone the team repository:
 
 ```bash
 git clone https://github.com/Howerchen666/audiobookshelf.git
