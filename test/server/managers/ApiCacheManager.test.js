@@ -19,6 +19,29 @@ describe('ApiCacheManager', () => {
   })
 
   describe('middleware', () => {
+    it('does not cache settings reads', () => {
+      manager = new ApiCacheManager(cache)
+      for (const suffix of ['', '/', '?refresh=1', '/?refresh=1']) {
+        req.url = '/libraries/test-library/home-shelves' + suffix
+        manager.middleware(req, res, next)
+      }
+      expect(next.callCount).to.equal(4)
+      expect(cache.get.called).to.be.false
+      expect(res.originalSend).to.be.undefined
+    })
+
+    it('does not repopulate cache from a GET started before a preference save', () => {
+      const realCache = new LRUCache({ max: 10 })
+      manager = new ApiCacheManager(realCache)
+      req.url = '/libraries/test-library/personalized'
+      res.getHeaders.returns({})
+      manager.middleware(req, res, next)
+      manager.clear({ name: 'homeShelfPreference' }, 'afterUpsert')
+      res.send('stale shelves')
+      expect(realCache.size).to.equal(0)
+      expect(res.originalSend.calledWith('stale shelves')).to.be.true
+    })
+
     it('should send cached data if available', () => {
       // Arrange
       const cachedData = { body: 'cached data', headers: { 'content-type': 'application/json' }, statusCode: 200 }

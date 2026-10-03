@@ -3,7 +3,15 @@
     <!-- Cover size widget -->
     <widgets-cover-size-widget class="fixed right-4 z-50" :style="{ bottom: streamLibraryItem ? '181px' : '16px' }" />
 
-    <div v-if="loaded && !shelves.length && !search" class="w-full flex flex-col items-center justify-center py-12">
+    <div v-if="loadError && !search" role="alert" class="text-center py-12">
+      <p class="mb-4">{{ $strings.MessageHomeShelvesContentFailed }}</p>
+      <ui-btn @click="fetchCategories">{{ $strings.ButtonHomeShelvesRetry }}</ui-btn>
+    </div>
+    <div v-else-if="loaded && !shelves.length && !search && homePreferences && homePreferences.visible !== null" class="text-center py-12">
+      <p class="text-2xl mb-4">{{ homePreferences.visible.length ? $strings.MessageHomeShelvesNoMatches : $strings.MessageHomeShelvesAllHidden }}</p>
+      <ui-btn @click="$emit('customize')">{{ $strings.ButtonCustomizeHome }}</ui-btn>
+    </div>
+    <div v-else-if="loaded && !shelves.length && !search" class="w-full flex flex-col items-center justify-center py-12">
       <p class="text-center text-2xl mb-4 py-4">{{ $getString('MessageXLibraryIsEmpty', [libraryName]) }}</p>
       <div v-if="userIsAdminOrUp" class="flex">
         <ui-btn to="/config" color="bg-primary" class="w-52 mr-2">{{ $strings.ButtonConfigureScanner }}</ui-btn>
@@ -16,7 +24,7 @@
     <!-- Alternate plain view -->
     <div v-else-if="isAlternativeBookshelfView" class="w-full mb-24e">
       <template v-for="(shelf, index) in supportedShelves">
-        <widgets-item-slider :shelf-id="shelf.id" :key="index + '.'" :items="shelf.entities" :continue-listening-shelf="shelf.id === 'continue-listening' || shelf.id === 'continue-reading'" :type="shelf.type" class="bookshelf-row pl-8e my-6e" @selectEntity="(payload) => selectEntity(payload, index)">
+        <widgets-item-slider :shelf-id="shelf.id" :key="shelf.id" :items="shelf.entities" :continue-listening-shelf="shelf.id === 'continue-listening' || shelf.id === 'continue-reading'" :type="shelf.type" class="bookshelf-row pl-8e my-6e" @selectEntity="(payload) => selectEntity(payload, index)">
           <h2 class="font-semibold text-gray-100">{{ $strings[shelf.labelStringKey] }}</h2>
         </widgets-item-slider>
       </template>
@@ -24,7 +32,7 @@
     <!-- Regular bookshelf view -->
     <div v-else class="w-full">
       <template v-for="(shelf, index) in supportedShelves">
-        <app-book-shelf-row :key="index" :index="index" :shelf="shelf" :size-multiplier="sizeMultiplier" :book-cover-width="bookCoverWidth" :book-cover-aspect-ratio="coverAspectRatio" :continue-listening-shelf="shelf.id === 'continue-listening' || shelf.id === 'continue-reading'" @selectEntity="(payload) => selectEntity(payload, index)" />
+        <app-book-shelf-row :key="shelf.id" :index="index" :shelf="shelf" :size-multiplier="sizeMultiplier" :book-cover-width="bookCoverWidth" :book-cover-aspect-ratio="coverAspectRatio" :continue-listening-shelf="shelf.id === 'continue-listening' || shelf.id === 'continue-reading'" @selectEntity="(payload) => selectEntity(payload, index)" />
       </template>
     </div>
   </div>
@@ -34,6 +42,7 @@
 export default {
   props: {
     search: Boolean,
+    homePreferences: { type: Object, default: null },
     results: {
       type: Object,
       default: () => {}
@@ -42,6 +51,8 @@ export default {
   data() {
     return {
       loaded: false,
+      loadError: false,
+      requestSequence: 0,
       keywordFilterTimeout: null,
       scannerParseSubtitle: false,
       wrapperClientWidth: 0,
@@ -93,9 +104,24 @@ export default {
       return !!this.$store.getters['tasks/getRunningLibraryScanTask'](this.currentLibraryId)
     }
   },
+  watch: {
+    // Live progress/item events can remove entries between selections.
+    supportedShelves: {
+      deep: true,
+      handler() { this.reindexShelves() }
+    }
+  },
   methods: {
+    reindexShelves() {
+      let total = 0
+      for (const shelf of this.supportedShelves) {
+        shelf.shelfStartIndex = total
+        total += shelf.entities.length
+      }
+      this.lastItemIndexSelected = -1
+    },
     selectEntity({ entity, shiftKey }, shelfIndex) {
-      const shelf = this.shelves[shelfIndex]
+      const shelf = this.supportedShelves[shelfIndex]
       const entityShelfIndex = shelf.entities.findIndex((ent) => ent.id === entity.id)
       const indexOf = shelf.shelfStartIndex + entityShelfIndex
 
@@ -115,7 +141,7 @@ export default {
         }
 
         const flattenedEntitiesArray = []
-        this.shelves.map((s) => flattenedEntitiesArray.push(...s.entities))
+        this.supportedShelves.map((s) => flattenedEntitiesArray.push(...s.entities))
 
         let isSelecting = false
         // If any items in this range is not selected then select all otherwise unselect all
@@ -167,6 +193,9 @@ export default {
       this.loaded = true
     },
     async fetchCategories() {
+      const sequence = ++this.requestSequence
+      const libraryId = this.currentLibraryId
+      this.loadError = false
       // Sets the limit for the number of items to be displayed based on the viewport width.
       const viewportWidth = window.innerWidth
       let limit
@@ -178,22 +207,17 @@ export default {
 
       const limitQuery = limit ? `&limit=${limit}` : ''
 
-      const categories = await this.$axios
-        .$get(`/api/libraries/${this.currentLibraryId}/personalized?include=rssfeed,numEpisodesIncomplete,share${limitQuery}`)
-        .then((data) => {
-          return data
-        })
-        .catch((error) => {
-          console.error('Failed to fetch categories', error)
-          return []
-        })
-
-      let totalEntityCount = 0
-      for (const shelf of categories) {
-        shelf.shelfStartIndex = totalEntityCount
-        totalEntityCount += shelf.entities.length
+      try {
+        const categories = await this.$axios.$get(`/api/libraries/${libraryId}/personalized?include=rssfeed,numEpisodesIncomplete,share${limitQuery}`)
+        if (sequence !== this.requestSequence || libraryId !== this.currentLibraryId) return
+        this.shelves = categories
+        this.reindexShelves()
+        this.loaded = true
+      } catch (error) {
+        if (sequence !== this.requestSequence || libraryId !== this.currentLibraryId) return
+        console.error('Failed to fetch categories', error)
+        this.loadError = true
       }
-      this.shelves = categories
     },
     async setShelvesFromSearch() {
       const shelves = []
@@ -508,6 +532,7 @@ export default {
     this.init()
   },
   beforeDestroy() {
+    this.requestSequence++
     this.removeListeners()
   }
 }
