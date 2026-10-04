@@ -103,8 +103,10 @@ export default {
       this.removeFocus()
     },
     removeFocus() {
+      const wasFocused = this.focusedDigit !== null
       this.focusedDigit = null
       this.removeListeners()
+      if (wasFocused) this.$emit('blur')
     },
     focusDigit(digit) {
       if (this.focusedDigit == null || isNaN(this.focusedDigit)) this.initListeners()
@@ -164,7 +166,7 @@ export default {
       this.updateSeconds()
     },
     keydown(evt) {
-      if (!this.focusedDigit || !evt.key) return
+      if (!this.focusedDigit || !evt.key || evt.ctrlKey || evt.metaKey || evt.altKey) return
 
       if (evt.key === 'ArrowLeft') {
         return this.shiftFocusLeft()
