@@ -27,6 +27,8 @@
           <ui-btn v-if="newChapters.length > 1" :color="showShiftTimes ? 'bg-bg' : 'bg-primary'" class="mx-1 whitespace-nowrap" small @click="showShiftTimes = !showShiftTimes">{{ $strings.ButtonShiftTimes }}</ui-btn>
           <ui-btn color="bg-primary" small :class="{ 'mx-1': newChapters.length > 1 }" @click="showFindChaptersModal = true">{{ $strings.ButtonLookup }}</ui-btn>
           <div class="grow" />
+          <ui-btn small class="mx-1" :disabled="!canUndo || saving" aria-label="Undo" title="Undo (Ctrl+Z)" @click="undoChapters"><span class="material-symbols text-base">undo</span></ui-btn>
+          <ui-btn small class="mx-1" :disabled="!canRedo || saving" aria-label="Redo" title="Redo (Ctrl+Y)" @click="redoChapters"><span class="material-symbols text-base">redo</span></ui-btn>
           <ui-btn v-if="hasChanges" small class="mx-1" @click.stop="resetChapters">{{ $strings.ButtonReset }}</ui-btn>
           <ui-btn v-if="hasChanges" color="bg-success" class="mx-1" :disabled="!hasChanges" small @click="saveChapters">{{ $strings.ButtonSave }}</ui-btn>
           <div class="w-32 hidden min-[1120px]:block" />
@@ -80,8 +82,8 @@
               </ui-tooltip>
 
               <div class="flex-1 min-w-0">
-                <ui-text-input v-if="showSecondInputs" v-model="chapter.start" type="number" class="text-xs" @change="checkChapters" />
-                <ui-time-picker v-else class="text-xs" v-model="chapter.start" :show-three-digit-hour="mediaDuration >= 360000" @change="checkChapters" />
+                <ui-text-input v-if="showSecondInputs" v-model="chapter.start" type="number" class="text-xs" @change="checkChapters(false)" @blur="commitChapterEdit" />
+                <ui-time-picker v-else class="text-xs" v-model="chapter.start" :show-three-digit-hour="mediaDuration >= 360000" @change="checkChapters(false)" @blur="commitChapterEdit" />
               </div>
 
               <ui-tooltip :text="$strings.TooltipAddOneSecond" direction="bottom">
@@ -92,7 +94,7 @@
             </div>
           </div>
           <div class="grow px-1">
-            <ui-text-input v-model="chapter.title" @change="checkChapters" class="text-xs min-w-52" />
+            <ui-text-input v-model="chapter.title" @change="checkChapters(false)" @blur="commitChapterEdit" class="text-xs min-w-52" />
           </div>
           <div class="w-7 min-w-7 px-1 py-1">
             <div class="flex items-center justify-center">
@@ -331,6 +333,8 @@ export default {
   data() {
     return {
       newChapters: [],
+      chapterHistory: [],
+      chapterHistoryIndex: -1,
       selectedChapter: null,
       showShiftTimes: false,
       shiftAmount: 0,
@@ -361,7 +365,27 @@ export default {
       detectedPattern: null
     }
   },
+  watch: {
+    'libraryItem.id'(id, previousId) {
+      if (id !== previousId) {
+        this.$eventBus.$off(`${previousId}_updated`, this.libraryItemUpdated)
+        this.destroyAudioEl()
+        this.initChapters()
+        this.asinInput = this.mediaMetadata.asin || null
+        this.chapterData = null
+        this.showFindChaptersModal = false
+        this.showBulkChapterModal = false
+        this.$eventBus.$on(`${id}_updated`, this.libraryItemUpdated)
+      }
+    }
+  },
   computed: {
+    canUndo() {
+      return this.chapterHistoryIndex > 0 || (this.chapterHistoryIndex >= 0 && JSON.stringify(this.chapterSnapshot()) !== JSON.stringify(this.chapterHistory[this.chapterHistoryIndex]))
+    },
+    canRedo() {
+      return this.chapterHistoryIndex < this.chapterHistory.length - 1
+    },
     streamLibraryItem() {
       return this.$store.state.streamLibraryItem
     },
@@ -403,6 +427,63 @@ export default {
     }
   },
   methods: {
+    // Only editable data and lock associations belong to history. Derived values
+    // are rebuilt by checkChapters; audio and playback position stay independent.
+    chapterSnapshot() {
+      return {
+        chapters: this.newChapters.map(({ error, ...chapter }) => ({ ...chapter })),
+        lockedChapters: Array.from(this.lockedChapters).sort((a, b) => a - b),
+        lastSelectedLockIndex: this.lastSelectedLockIndex
+      }
+    },
+    resetChapterHistory() {
+      this.chapterHistory = [this.chapterSnapshot()]
+      this.chapterHistoryIndex = 0
+    },
+    recordChapterHistory() {
+      const snapshot = this.chapterSnapshot()
+      if (JSON.stringify(snapshot) === JSON.stringify(this.chapterHistory[this.chapterHistoryIndex])) return
+      this.chapterHistory = this.chapterHistory.slice(0, this.chapterHistoryIndex + 1)
+      this.chapterHistory.push(snapshot)
+      // Keep the current state plus at most 100 undoable operations.
+      if (this.chapterHistory.length > 101) this.chapterHistory.shift()
+      this.chapterHistoryIndex = this.chapterHistory.length - 1
+    },
+    commitChapterEdit() {
+      this.checkChapters()
+    },
+    restoreChapterHistory(index) {
+      const snapshot = this.chapterHistory[index]
+      if (!snapshot) return
+      this.chapterHistoryIndex = index
+      this.newChapters = snapshot.chapters.map((chapter) => ({ ...chapter }))
+      this.lockedChapters = new Set(snapshot.lockedChapters)
+      this.lastSelectedLockIndex = snapshot.lastSelectedLockIndex
+      this.checkChapters(false)
+    },
+    undoChapters() {
+      if (this.saving) return
+      this.commitChapterEdit()
+      if (this.canUndo) this.restoreChapterHistory(this.chapterHistoryIndex - 1)
+    },
+    redoChapters() {
+      if (this.saving) return
+      this.commitChapterEdit()
+      if (this.canRedo) this.restoreChapterHistory(this.chapterHistoryIndex + 1)
+    },
+    historyKeydown(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing || this.saving) return
+      if (this.showFindChaptersModal || this.showBulkChapterModal) return
+      // Preserve native undo while typing in ordinary text inputs.
+      if (event.target.closest('input, textarea, [contenteditable="true"]')) return
+      const key = (event.key || '').toLowerCase()
+      if (key === 'z' || key === 'y') {
+        event.preventDefault()
+        event.stopPropagation()
+        if (key === 'y' || event.shiftKey) this.redoChapters()
+        else this.undoChapters()
+      }
+    },
     formatNumberWithPadding(number, pattern) {
       if (!pattern || !pattern.hasLeadingZeros || !pattern.originalPadding) {
         return number.toString()
@@ -410,6 +491,7 @@ export default {
       return number.toString().padStart(pattern.originalPadding, '0')
     },
     setChaptersFromTracks() {
+      this.commitChapterEdit()
       let currentStartTime = 0
       let index = 0
       const chapters = []
@@ -423,6 +505,7 @@ export default {
         currentStartTime += track.duration
       }
       this.newChapters = chapters
+      this.lastSelectedLockIndex = null
       this.lockedChapters = new Set()
       this.checkChapters()
     },
@@ -430,6 +513,7 @@ export default {
       this.removeBranding = !this.removeBranding
     },
     shiftChapterTimes() {
+      this.commitChapterEdit()
       if (!this.shiftAmount || isNaN(this.shiftAmount) || this.newChapters.length <= 1) {
         return
       }
@@ -460,6 +544,7 @@ export default {
       this.checkChapters()
     },
     incrementChapterTime(chapter, amount) {
+      this.commitChapterEdit()
       if (chapter.id === 0 && chapter.start + amount < 0) {
         return
       }
@@ -471,6 +556,7 @@ export default {
       this.checkChapters()
     },
     adjustChapterStartTime(chapter) {
+      this.commitChapterEdit()
       const newStartTime = chapter.start + this.elapsedTime
       chapter.start = newStartTime
       this.checkChapters()
@@ -494,6 +580,7 @@ export default {
       this.playStartTime = null
     },
     toggleChapterLock(chapter, event) {
+      this.commitChapterEdit()
       const chapterId = chapter.id
 
       if (event.shiftKey && this.lastSelectedLockIndex !== null) {
@@ -518,16 +605,21 @@ export default {
 
       this.lastSelectedLockIndex = chapterId
       this.lockedChapters = new Set(this.lockedChapters)
+      this.recordChapterHistory()
     },
     lockAllChapters() {
+      this.commitChapterEdit()
       this.newChapters.forEach((chapter) => {
         this.lockedChapters.add(chapter.id)
       })
       this.lockedChapters = new Set(this.lockedChapters)
+      this.recordChapterHistory()
     },
     unlockAllChapters() {
+      this.commitChapterEdit()
       this.lockedChapters.clear()
       this.lockedChapters = new Set(this.lockedChapters)
+      this.recordChapterHistory()
     },
     toggleAllChaptersLock() {
       if (this.allChaptersLocked) {
@@ -540,24 +632,30 @@ export default {
       this.$store.commit('showEditModal', this.libraryItem)
     },
     addChapter(chapter) {
+      this.commitChapterEdit()
       const newChapter = {
         id: chapter.id + 1,
         start: chapter.start,
         end: chapter.end,
         title: ''
       }
+      this.lockedChapters = new Set(Array.from(this.lockedChapters, (id) => id > chapter.id ? id + 1 : id))
+      this.lastSelectedLockIndex = null
       this.newChapters.splice(chapter.id + 1, 0, newChapter)
       this.checkChapters()
     },
     removeChapter(chapter) {
+      this.commitChapterEdit()
       if (this.lockedChapters.has(chapter.id)) {
         this.$toast.warning(this.$strings.ToastChapterLocked)
         return
       }
+      this.lockedChapters = new Set(Array.from(this.lockedChapters).filter((id) => id !== chapter.id).map((id) => id > chapter.id ? id - 1 : id))
+      this.lastSelectedLockIndex = null
       this.newChapters = this.newChapters.filter((ch) => ch.id !== chapter.id)
       this.checkChapters()
     },
-    checkChapters() {
+    checkChapters(recordHistory = true) {
       let previousStart = 0
       let hasChanges = this.newChapters.length !== this.chapters.length
 
@@ -566,7 +664,11 @@ export default {
         this.newChapters[i].start = Number(this.newChapters[i].start)
         this.newChapters[i].title = (this.newChapters[i].title || '').trim()
 
-        if (i === 0 && this.newChapters[i].start !== 0) {
+        this.newChapters[i].end = i + 1 < this.newChapters.length ? Number(this.newChapters[i + 1].start) : this.mediaDuration
+
+        if (!Number.isFinite(this.newChapters[i].start)) {
+          this.newChapters[i].error = this.$strings.MessageChapterErrorStartLtPrev
+        } else if (i === 0 && this.newChapters[i].start !== 0) {
           this.newChapters[i].error = this.$strings.MessageChapterErrorFirstNotZero
         } else if (this.newChapters[i].start <= previousStart && i > 0) {
           this.newChapters[i].error = this.$strings.MessageChapterErrorStartLtPrev
@@ -593,6 +695,7 @@ export default {
       }
 
       this.hasChanges = hasChanges
+      if (recordHistory) this.recordChapterHistory()
     },
     getAudioTrackForTime(time) {
       if (typeof time !== 'number') {
@@ -706,6 +809,7 @@ export default {
         .$post(`/api/items/${this.libraryItem.id}/chapters`, payload)
         .then((data) => {
           this.saving = false
+          this.resetChapterHistory()
           if (data.updated) {
             this.$toast.success(this.$strings.ToastChaptersUpdated)
             this.reloadLibraryItem()
@@ -720,6 +824,7 @@ export default {
         })
     },
     applyChapterNamesOnly() {
+      this.commitChapterEdit()
       this.newChapters.forEach((chapter, index) => {
         if (this.chapterData.chapters[index] && !this.lockedChapters.has(chapter.id)) {
           chapter.title = this.chapterData.chapters[index].title
@@ -732,6 +837,7 @@ export default {
       this.checkChapters()
     },
     applyChapterData() {
+      this.commitChapterEdit()
       let index = 0
       const audibleChapters = this.chapterData.chapters
         .filter((chap) => chap.startOffsetSec < this.mediaDuration)
@@ -857,7 +963,9 @@ export default {
         ]
       }
       this.lockedChapters = new Set()
-      this.checkChapters()
+      this.lastSelectedLockIndex = null
+      this.checkChapters(false)
+      this.resetChapterHistory()
     },
     removeAllChaptersClick() {
       const payload = {
@@ -872,27 +980,11 @@ export default {
       this.$store.commit('globals/setConfirmPrompt', payload)
     },
     removeAllChapters() {
-      this.saving = true
-      const payload = {
-        chapters: []
-      }
-      this.$axios
-        .$post(`/api/items/${this.libraryItem.id}/chapters`, payload)
-        .then((data) => {
-          if (data.updated) {
-            this.$toast.success(this.$strings.ToastChaptersRemoved)
-            this.reloadLibraryItem()
-          } else {
-            this.$toast.info(this.$strings.MessageNoUpdatesWereNecessary)
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to remove chapters', error)
-          this.$toast.error(this.$strings.ToastRemoveFailed)
-        })
-        .finally(() => {
-          this.saving = false
-        })
+      this.commitChapterEdit()
+      this.newChapters = []
+      this.lockedChapters = new Set()
+      this.lastSelectedLockIndex = null
+      this.checkChapters()
     },
     handleBulkChapterAdd() {
       const input = this.bulkChapterInput.trim()
@@ -923,6 +1015,7 @@ export default {
       }
     },
     addSingleChapterFromInput(title) {
+      this.commitChapterEdit()
       // Find the last chapter to determine where to add the new one
       const lastChapter = this.newChapters[this.newChapters.length - 1]
       const newStart = lastChapter ? lastChapter.end : 0
@@ -941,6 +1034,7 @@ export default {
     },
 
     addBulkChapters() {
+      this.commitChapterEdit()
       const count = parseInt(this.bulkChapterCount)
       if (!count || count < 1 || count > 150) {
         this.$toast.error(this.$strings.ToastBulkChapterInvalidCount)
@@ -1005,9 +1099,11 @@ export default {
     this.asinInput = this.mediaMetadata.asin || null
     this.initChapters()
 
+    window.addEventListener('keydown', this.historyKeydown)
     this.$eventBus.$on(`${this.libraryItem.id}_updated`, this.libraryItemUpdated)
   },
   beforeDestroy() {
+    window.removeEventListener('keydown', this.historyKeydown)
     this.destroyAudioEl()
 
     this.$eventBus.$off(`${this.libraryItem.id}_updated`, this.libraryItemUpdated)
