@@ -31,6 +31,9 @@ Create a book library that permits ebooks, place EPUB/PDF copies in the same boo
 # Server regression, API, migration, SQLite persistence, and filter tests:
 npm test
 
+# Chapter-history regression tests:
+(cd client && npm run test:chapters)
+
 # Client compilation and static generation:
 (cd client && npm run generate)
 
@@ -52,14 +55,48 @@ docker run --rm --platform linux/amd64 \
 
 ## Student contributions
 
-### @Howerchen666 — ebook reading progress
+### @Howerchen666 (Haowen Chen) — maintain reading progress across ebook files
 
-- **Change:** `EbookProgress` stores positions per user, item, and ebook file. EPUB uses CFI/chapter titles; PDF/comics use pages/totals; MOBI/AZW3 use text offsets/headings. Primary and supplementary files keep separate records. Item pages, file lists, cards, Continue Reading, filters, and resets support them without changing listening progress.
-- **API/storage:** `GET /api/me/ebook-progress/:libraryItemId`, `PUT` and `DELETE /api/me/ebook-progress/:libraryItemId/:fileIno`; migration [v2.37.0-create-ebook-progresses.js](server/migrations/v2.37.0-create-ebook-progresses.js). The server validates access and payload structure; readers interpret positions. Legacy positions convert only after successful restoration, with confirmation when multiple files are compatible.
-- **Checks and results:** At `b56c1286`, `npm test`: **371 passed**; Cypress command above: **126 passed across seven specs**, including **21 ebook checks**; `npm run generate` in `client/`: **passed**. Coverage includes authorization, independent records, SQLite reopen, legacy/mismatch handling, labels, resets, filters, and listening isolation. Build warnings are nonfatal.
-- **Changes from the RFC:** Ambiguous legacy assignment confirms the file being opened. Page labels use the translation helper and are stored as strings. Additional fixes address saves completing after close, SQLite upsert IDs, per-file EPUB caches, removed-file cleanup, and MOBI/AZW3 iframe sizing.
-- **What remains:** Complete and record the manual walkthrough below to verify real ebook rendering and restoration across a server restart. Automated tests cover reader behavior and database persistence separately, with ebook loading mocked. Before release, align the package version (currently 2.36.1) with the v2.37.0 migration; development startup currently creates the table through Sequelize sync.
-- **Known limitations:** MOBI/AZW3 may reopen near the saved passage with minor layout drift. A replacement file with a new inode gets a separate progress record. Saved labels keep the language used when saved. External reader syncing and additional formats remain outside the RFC's scope.
+Implements the RFC **Maintain Reading Progress Across Ebook Files**. Each ebook file, including supplementary files, keeps its own position when readers or primary files change. The item page and file list show readable positions and update after reader close as saves complete, without a page reload. Reading and per-file resets leave listening progress unchanged.
+
+#### Change and design
+
+[EbookProgress](server/models/EbookProgress.js) stores `positionType`, `positionValue`, `progress`, and `displayLabel` per `(userId, libraryItemId, fileIno)`, with a unique constraint and string inode. The [migration](server/migrations/v2.37.0-create-ebook-progresses.js) adds the table without rewriting legacy progress.
+
+| Reader | Stored position | Readable label |
+| --- | --- | --- |
+| EPUB | `epub-cfi`: EPUB CFI string | Chapter title, falling back to percentage |
+| PDF | `page`: page number | Page 14 of 120 |
+| Comic (CBZ/CBR) | `page`: page number | Page 14 of 120 |
+| MOBI/AZW3 | `text-offset`: character offset in rendered text | Nearest heading, falling back to percentage |
+
+- **API:** `GET /api/me/ebook-progress/:libraryItemId` lists the current user's records; `PUT` and `DELETE /api/me/ebook-progress/:libraryItemId/:fileIno` save or reset one file.
+- **Position ownership:** The server validates access, files, and payload structure, storing positions as typed, opaque values. Existing readers interpret and validate them against the opened file. A mismatch produces a warning and opens at the beginning without overwriting the record during initialization. Labels are display-only. This keeps format knowledge inside readers and reuses `Reader.vue`'s file selection.
+- **Legacy compatibility:** Old EPUB CFI and numeric page positions restore automatically when one file is compatible. Multiple compatible files require confirmation. Old ebook fields clear only after successful restoration and per-file saving; declined, unknown, or unrestorable positions remain intact.
+- **Integration:** Item pages use the primary file's reading record; file rows show their own labels. Cards support per-file progress. Continue Reading and in-progress filters include supplementary-only progress and exclude finished books. Resets and removed-file cleanup preserve other files' positions.
+
+#### Checks and results
+
+The latest full run at `c0012dd8` passed on Linux ARM64 with Node 20 and headless Electron. These are **combined-project regression totals**, including teammates' tests:
+
+| Check | Result |
+| --- | --- |
+| `npm test` | **407 passed** |
+| `npm run test:chapters` in `client/` | **11 passed** |
+| Full Cypress component command above | **126 passed across seven specs**, including **21 ebook checks** |
+| `npm run generate` in `client/` | **Passed**: production build and static generation |
+
+All **544 tests passed**. [Storage tests](test/server/models/EbookProgress.test.js), [API tests](test/server/controllers/MeControllerEbookProgress.test.js), [filter tests](test/server/utils/queries/libraryItemsBookFilters.test.js), and [reader/UI tests](client/cypress/tests/components/readers/EbookProgressReaders.cy.js) cover independent records, authorization, SQLite reopen, migration, primary switching, legacy/malformed/mismatched positions, MOBI font/viewport changes, labels, close-time saves, resets, Continue Reading, and listening isolation. Component tests mock loaders and API calls; real-file restoration across a full server restart remains a manual check. Build warnings were nonfatal.
+
+#### Changes from the RFC
+
+- **Legacy assignment:** Confirmation uses the file already being opened instead of a separate chooser, reusing existing file selection. Declining preserves the old position.
+- **MOBI/AZW3 precision:** Saving uses the start of the first visible non-whitespace text node rather than the RFC's exact first visible character. Save/restore count characters consistently, but reopening can land earlier in a paragraph, with further layout drift. Sentence/paragraph snapping was not added.
+- **Refinements:** Page labels use the translation helper before string storage, retaining the RFC's display-only design. Extra fixes address late saves after close, SQLite upsert IDs, per-file EPUB caches, removed-file cleanup, and MOBI/AZW3 iframe height.
+
+#### What remains
+Known limitations of the implemented design: a replacement file with a new inode gets a new progress record, and saved labels retain the language used at save time. Preserving progress across file replacements and retranslating stored labels are possible future improvements. 
+MOBI/AZW3 uses the text offset approach which might cause a bit of drifting.
 
 ### @ALT-JS (Jiashen Du) — Choose which shelves I see on the home page
 
