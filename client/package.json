@@ -11,6 +11,7 @@
     "start": "nuxt start",
     "generate": "nuxt generate",
     "test": "npm run compile-tailwind && cypress run --component --browser chrome",
+    "test:chapters": "node --test test/chapterHistory.test.cjs",
     "test-visually": "npm run compile-tailwind && cypress open --component --browser chrome",
     "compile-tailwind": "npx @tailwindcss/cli -i ./assets/tailwind.css -o ./cypress/support/tailwind.compiled.css"
   },
