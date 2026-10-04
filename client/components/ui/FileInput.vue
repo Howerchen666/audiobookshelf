@@ -1,7 +1,7 @@
 <template>
   <div>
     <input ref="fileInput" type="file" :accept="accept" class="hidden" @change="inputChanged" />
-    <ui-btn @click="clickUpload" color="bg-primary" class="hidden md:block w-full" type="text"><slot /></ui-btn>
+    <ui-btn @click="clickUpload" color="bg-primary" class="hidden md:block w-full" :class="{ 'whitespace-nowrap': small }" :small="small" type="text"><slot /></ui-btn>
     <ui-icon-btn @click="clickUpload" icon="upload" class="block md:hidden" />
   </div>
 </template>
@@ -12,7 +12,8 @@ export default {
     accept: {
       type: String,
       default: '.png, .jpg, .jpeg, .webp'
-    }
+    },
+    small: Boolean
   },
   data() {
     return {}

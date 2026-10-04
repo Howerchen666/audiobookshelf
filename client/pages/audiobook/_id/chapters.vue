@@ -26,6 +26,8 @@
           <ui-btn v-if="chapters.length" color="bg-primary" small class="mx-1 whitespace-nowrap" @click.stop="removeAllChaptersClick">{{ $strings.ButtonRemoveAll }}</ui-btn>
           <ui-btn v-if="newChapters.length > 1" :color="showShiftTimes ? 'bg-bg' : 'bg-primary'" class="mx-1 whitespace-nowrap" small @click="showShiftTimes = !showShiftTimes">{{ $strings.ButtonShiftTimes }}</ui-btn>
           <ui-btn color="bg-primary" small :class="{ 'mx-1': newChapters.length > 1 }" @click="showFindChaptersModal = true">{{ $strings.ButtonLookup }}</ui-btn>
+          <ui-file-input ref="chapterFileInput" accept=".json,application/json" class="mx-1" small @change="importChapterFile">{{ $strings.ButtonImportChapters }}</ui-file-input>
+          <ui-btn small class="mx-1 whitespace-nowrap" @click.stop="exportChapters">{{ $strings.ButtonExportChapters }}</ui-btn>
           <div class="grow" />
           <ui-btn small class="mx-1" :disabled="!canUndo || saving" aria-label="Undo" title="Undo (Ctrl+Z)" @click="undoChapters"><span class="material-symbols text-base">undo</span></ui-btn>
           <ui-btn small class="mx-1" :disabled="!canRedo || saving" aria-label="Redo" title="Redo (Ctrl+Y)" @click="redoChapters"><span class="material-symbols text-base">redo</span></ui-btn>
@@ -182,6 +184,35 @@
       <ui-loading-indicator />
     </div>
 
+    <modals-modal v-model="showImportPreview" name="import-chapters" :width="550">
+      <template #outer>
+        <div class="absolute top-0 left-0 p-5 w-2/3 overflow-hidden pointer-events-none">
+          <p class="text-3xl text-white truncate pointer-events-none">{{ $strings.HeaderImportChapterPreview }}</p>
+        </div>
+      </template>
+      <div class="w-full max-h-full overflow-y-auto p-4 text-sm rounded-lg bg-bg shadow-lg border border-black-300">
+        <p class="mb-3">{{ $strings.MessageImportChapterPreview }}</p>
+        <div v-for="(chapter, index) in importCandidate" :key="index" class="py-2 border-b border-gray-700" :class="{ 'text-error': importErrors.some((error) => error.row === index) }">
+          <div class="flex gap-3"><span>#{{ index + 1 }}</span><span class="font-mono">{{ chapter.start }}</span><span class="break-words">{{ chapter.title }}</span></div>
+          <p v-for="code in importRowErrors(index)" :key="code" class="pl-7 text-error">{{ chapterErrorMessage(code) }}</p>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <ui-btn small @click="cancelChapterImport">{{ $strings.ButtonCancel }}</ui-btn>
+          <ui-btn small color="bg-success" :disabled="importErrors.length > 0" @click="applyChapterImport">{{ $strings.ButtonApplyChapters }}</ui-btn>
+        </div>
+      </div>
+    </modals-modal>
+
+    <modals-modal v-model="showExportConfirm" name="export-chapters" :width="500">
+      <div class="w-full p-4 text-sm rounded-lg bg-bg shadow-lg border border-black-300">
+        <p class="mb-4">{{ $strings.MessageExportUnsavedChapters }}</p>
+        <div class="flex justify-end gap-2">
+          <ui-btn small @click="showExportConfirm = false">{{ $strings.ButtonCancel }}</ui-btn>
+          <ui-btn small color="bg-success" @click="confirmChapterExport">{{ $strings.ButtonExportChapters }}</ui-btn>
+        </div>
+      </div>
+    </modals-modal>
+
     <!-- audible chapter lookup modal -->
     <modals-modal v-model="showFindChaptersModal" name="edit-book" :width="500" :processing="findingChapters">
       <template #outer>
@@ -299,6 +330,7 @@
 
 <script>
 import path from 'path'
+import { parseChapterList, validateChapters, serializeChapterList, ChapterError } from '../../../lib/chapterList'
 
 export default {
   async asyncData({ store, params, app, redirect, from }) {
@@ -347,6 +379,10 @@ export default {
       regionInput: 'US',
       findingChapters: false,
       showFindChaptersModal: false,
+      showImportPreview: false,
+      showExportConfirm: false,
+      importCandidate: [],
+      importErrors: [],
       chapterData: null,
       asinError: null,
       removeBranding: false,
@@ -374,6 +410,8 @@ export default {
         this.asinInput = this.mediaMetadata.asin || null
         this.chapterData = null
         this.showFindChaptersModal = false
+        this.cancelChapterImport()
+        this.showExportConfirm = false
         this.showBulkChapterModal = false
         this.$eventBus.$on(`${id}_updated`, this.libraryItemUpdated)
       }
@@ -427,6 +465,74 @@ export default {
     }
   },
   methods: {
+    chapterErrorMessage(code) {
+      const keys = {
+        [ChapterError.TITLE_EMPTY]: 'MessageChapterErrorTitleEmpty',
+        [ChapterError.START_INVALID]: 'MessageChapterErrorStartInvalid',
+        [ChapterError.FIRST_NOT_ZERO]: 'MessageChapterErrorFirstNotZero',
+        [ChapterError.START_NOT_INCREASING]: 'MessageChapterErrorStartLtPrev',
+        [ChapterError.START_GTE_DURATION]: 'MessageChapterErrorStartGteDuration'
+      }
+      return this.$strings[keys[code]]
+    },
+    importRowErrors(index) {
+      return (this.importErrors.find((error) => error.row === index) || { codes: [] }).codes
+    },
+    async importChapterFile(file) {
+      this.cancelChapterImport()
+      try {
+        const parsed = parseChapterList(await file.text())
+        if (parsed.error) {
+          this.$toast.error(this.$strings[parsed.error === 'INVALID_JSON' ? 'ToastChapterImportInvalidJson' : 'ToastChapterImportInvalidSchema'])
+          return
+        }
+        this.importCandidate = parsed.chapters
+        this.importErrors = validateChapters(parsed.chapters, this.mediaDuration)
+        this.showImportPreview = true
+      } catch (error) {
+        console.error('Failed to read chapter file', error)
+        this.$toast.error(this.$strings.ToastChapterImportReadFailed)
+      } finally {
+        if (this.$refs.chapterFileInput) this.$refs.chapterFileInput.reset()
+      }
+    },
+    cancelChapterImport() {
+      this.showImportPreview = false
+      this.importCandidate = []
+      this.importErrors = []
+    },
+    applyChapterImport() {
+      this.importErrors = validateChapters(this.importCandidate, this.mediaDuration)
+      if (!this.importCandidate.length || this.importErrors.length) return
+      // Commit any pending manual edit, then record the replacement as one step.
+      this.commitChapterEdit()
+      this.newChapters = this.importCandidate.map(({ title, start }, id) => ({ id, title, start }))
+      this.lockedChapters = new Set()
+      this.lastSelectedLockIndex = null
+      this.checkChapters()
+      this.cancelChapterImport()
+    },
+    exportChapters() {
+      this.checkChapters(false)
+      if (validateChapters(this.newChapters, this.mediaDuration).length || !this.newChapters.length) {
+        this.$toast.error(this.$strings.ToastChaptersHaveErrors)
+        return
+      }
+      if (this.hasChanges) {
+        this.showExportConfirm = true
+      } else {
+        this.downloadChapterList()
+      }
+    },
+    confirmChapterExport() {
+      this.downloadChapterList()
+      this.showExportConfirm = false
+    },
+    downloadChapterList() {
+      const url = URL.createObjectURL(new Blob([serializeChapterList(this.newChapters)], { type: 'application/json' }))
+      this.$downloadFile(url, 'chapters.json')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    },
     // Only editable data and lock associations belong to history. Derived values
     // are rebuilt by checkChapters; audio and playback position stay independent.
     chapterSnapshot() {
@@ -473,7 +579,7 @@ export default {
     },
     historyKeydown(event) {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing || this.saving) return
-      if (this.showFindChaptersModal || this.showBulkChapterModal) return
+      if (this.showFindChaptersModal || this.showBulkChapterModal || this.showImportPreview) return
       // Preserve native undo while typing in ordinary text inputs.
       if (event.target.closest('input, textarea, [contenteditable="true"]')) return
       const key = (event.key || '').toLowerCase()
@@ -656,28 +762,19 @@ export default {
       this.checkChapters()
     },
     checkChapters(recordHistory = true) {
-      let previousStart = 0
       let hasChanges = this.newChapters.length !== this.chapters.length
 
       for (let i = 0; i < this.newChapters.length; i++) {
         this.newChapters[i].id = i
-        this.newChapters[i].start = Number(this.newChapters[i].start)
+        const startInput = this.newChapters[i].start
+        this.newChapters[i].start = startInput === '' || startInput === null ? NaN : Number(startInput)
         this.newChapters[i].title = (this.newChapters[i].title || '').trim()
-
         this.newChapters[i].end = i + 1 < this.newChapters.length ? Number(this.newChapters[i + 1].start) : this.mediaDuration
-
-        if (!Number.isFinite(this.newChapters[i].start)) {
-          this.newChapters[i].error = this.$strings.MessageChapterErrorStartLtPrev
-        } else if (i === 0 && this.newChapters[i].start !== 0) {
-          this.newChapters[i].error = this.$strings.MessageChapterErrorFirstNotZero
-        } else if (this.newChapters[i].start <= previousStart && i > 0) {
-          this.newChapters[i].error = this.$strings.MessageChapterErrorStartLtPrev
-        } else if (this.newChapters[i].start >= this.mediaDuration) {
-          this.newChapters[i].error = this.$strings.MessageChapterErrorStartGteDuration
-        } else {
-          this.newChapters[i].error = null
-        }
-        previousStart = this.newChapters[i].start
+      }
+      const errors = validateChapters(this.newChapters, this.mediaDuration)
+      for (let i = 0; i < this.newChapters.length; i++) {
+        const rowError = errors.find((error) => error.row === i)
+        this.newChapters[i].error = rowError ? rowError.codes.map(this.chapterErrorMessage).join('; ') : null
 
         if (hasChanges) {
           continue
@@ -782,16 +879,12 @@ export default {
     saveChapters() {
       this.checkChapters()
 
-      for (let i = 0; i < this.newChapters.length; i++) {
-        if (this.newChapters[i].error) {
-          this.$toast.error(this.$strings.ToastChaptersHaveErrors)
-          return
-        }
-        if (!this.newChapters[i].title) {
-          this.$toast.error(this.$strings.ToastChaptersMustHaveTitles)
-          return
-        }
+      if (validateChapters(this.newChapters, this.mediaDuration).length) {
+        this.$toast.error(this.$strings.ToastChaptersHaveErrors)
+        return
+      }
 
+      for (let i = 0; i < this.newChapters.length; i++) {
         const nextChapter = this.newChapters[i + 1]
         if (nextChapter) {
           this.newChapters[i].end = nextChapter.start
@@ -851,14 +944,12 @@ export default {
         })
 
       const merged = []
-      let audibleIdx = 0
       for (let i = 0; i < Math.max(this.newChapters.length, audibleChapters.length); i++) {
         const isLocked = this.lockedChapters.has(i)
         if (isLocked && this.newChapters[i]) {
           merged.push({ ...this.newChapters[i], id: i })
-        } else if (audibleChapters[audibleIdx]) {
-          merged.push({ ...audibleChapters[audibleIdx], id: i })
-          audibleIdx++
+        } else if (audibleChapters[i]) {
+          merged.push({ ...audibleChapters[i], id: i })
         } else if (this.newChapters[i]) {
           merged.push({ ...this.newChapters[i], id: i })
         }

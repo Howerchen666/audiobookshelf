@@ -106,3 +106,47 @@ MOBI/AZW3 uses the text offset approach which might cause a bit of drifting.
 - **Changes from the RFC:** Replaced the original separate default/customized paths with one catalog and assembler following review feedback. Moved preferences from `User.extraData` into a dedicated table to prevent stale account-setting writes from overwriting layouts. Clarified that future shelves remain hidden in saved layouts until selected. Additional fixes address stale cache refills, delayed UI responses, SQLite JSON reads, and selection offsets after reordering.
 - **What remains:** Complete manual checks for mobile layout, live library switching, playback-driven progress updates, and search selection. Rebuild and verify the Docker image before deployment. Automated tests cover these areas only where documented; the browser fixture contains no playable media.
 - **Known limitations:** Simultaneous saves for the same user/library use the last successful write; drafts are not merged. Other open tabs or devices do not automatically refresh their layout. Empty shelves produce no visible row. New shelves remain unchecked in customized layouts until selected or restored through Reset.
+
+### @YinfengL (Yinfeng Liu) — Export and import chapter lists via JSON
+
+Implements a robust JSON export/import format for chapter lists, allowing users to back up, edit externally, and transfer chapter metadata across audiobooks with varying durations.
+
+#### Change and design
+
+**Editor Integration & Behavior**
+
+- **Import & Preview**: Importing a JSON file strictly parses the data and generates a UI preview without mutating backend data. Canceling the preview safely discards all imported data.
+- **Apply vs. Save**: Applying the preview replaces the current editor draft, clears any existing locks, and integrates seamlessly with the editor's Undo/Redo stack. This action does not automatically save to the backend.
+- **Save & Portability**: Upon saving, the system dynamically recalculates each chapter's `end` time based on the next chapter's `start` time, bounding the final chapter to the target audiobook's duration. Environment-specific fields (`id`, `end`, duration, locks) are intentionally omitted from the export format to ensure cross-compatibility with media files of different lengths.
+
+**Chapter List JSON Format Specification** The feature introduces a portable, versioned JSON format. Unknown or extra fields are strictly rejected to prevent invalid data ingestion.
+
+- `version` (Number): The format version. Currently only `1` is supported.
+- `chapters` (Array): A non-empty array containing the chapter objects.
+  - `title` (String): The chapter title. It must not be empty after trimming leading and trailing whitespace.
+  - `start` (Number): The start time in seconds from the beginning of the audio. Decimal values are permitted.
+
+**Validation Rules**
+
+- The first chapter's `start` time must be exactly `0`.
+- Subsequent `start` times must be strictly increasing (no duplicate or out-of-order times).
+- Start times cannot be negative, non-finite, and must be strictly less than the target media's total duration.
+- _Error Handling_: Malformed JSON structures reject the file before the preview stage. Valid structures that violate business rules (e.g., negative start times) will display an error in the preview and disable the "Apply" action.
+
+**Example Payload**
+
+```json
+{
+  "version": 1,
+  "chapters": [
+    {
+      "title": "Opening Credits",
+      "start": 0
+    },
+    {
+      "title": "Chapter 1: The Beginning",
+      "start": 15.5
+    }
+  ]
+}
+```
