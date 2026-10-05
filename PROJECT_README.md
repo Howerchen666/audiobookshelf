@@ -150,3 +150,12 @@ Implements a robust JSON export/import format for chapter lists, allowing users 
   ]
 }
 ```
+
+### @3amBEANS (Aiden Ha) — Undo and redo chapter edits before saving
+
+- **Change:** Added Undo/Redo buttons and keyboard shortcuts (`Ctrl+Z`, `Ctrl+Y`, and `Ctrl+Shift+Z`) to the chapter editor. History supports title/time edits, chapter additions/removals, bulk shifts, and existing chapter lookup actions. Field edits commit on blur; each bulk action counts as one operation. New edits after undo clear redo.
+- **Design:** Stores full chapter snapshots and lock associations, bounded to 100 undoable operations plus the current state. Restoration recalculates chapter numbering, end times, validation messages, and unsaved-change status. Playback remains independent. Successful saves, Reset, and opening another book clear history.
+- **Checks and results:** `npm run test:chapters` in `client/`: **11 passed**. Tests cover grouped edits, redo branching, insertion/deletion, lock associations, calculated end times, validation, bulk shifts, playback independence, history limits, snapshot isolation, save success/failure, book switching, shortcuts, and time-picker commit boundaries.
+- **Manual verification:** Run the combined version using the shared instructions above, then open an audiobook’s chapter editor. Rename a chapter, delete another, and undo: the deleted chapter should return while the rename remains. Redo the deletion. Undo again and make a new edit: redo should become unavailable. Also check bulk shifts with locked chapters, playback during editing, and history clearing after Save, Reset, or opening another book.
+- **Changes from the RFC:** Defined storage and indexing before undo/redo methods, following review feedback. Set the bound to 100 operations (101 snapshots). Clarified that Save and Reset discard prior history. Made “Remove all” an undoable draft operation requiring Save. Fixed lock associations after insertion/deletion and explicitly commit pending field edits before button actions because shared buttons prevent blur.
+- **What remains:** Complete live browser checks with playable audio and verify the combined JSON import workflow: accepting an import should be one undoable replacement, restore previous locks on undo, and leave history unchanged when canceled. Automated history tests exercise page methods without a browser and do not verify local JSON-file import.
