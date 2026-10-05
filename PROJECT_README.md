@@ -109,7 +109,7 @@ MOBI/AZW3 uses the text offset approach which might cause a bit of drifting.
 
 ### @YinfengL (Yinfeng Liu) — Export and import chapter lists via JSON
 
-Implements a robust JSON export/import format for chapter lists, allowing users to back up, edit externally, and transfer chapter metadata across audiobooks with varying durations.
+Implements a robust JSON export/import format for chapter lists, allowing users to back up, edit externally, and transfer chapter metadata. The format is portable because it stores start times rather than fixed ends, safely adapting to destination audiobooks provided the imported start times fall within the target media's duration.
 
 #### Change and design
 
@@ -117,9 +117,10 @@ Implements a robust JSON export/import format for chapter lists, allowing users 
 
 - **Import & Preview**: Importing a JSON file strictly parses the data and generates a UI preview without mutating backend data. Canceling the preview safely discards all imported data.
 - **Apply vs. Save**: Applying the preview replaces the current editor draft, clears any existing locks, and integrates seamlessly with the editor's Undo/Redo stack. This action does not automatically save to the backend.
-- **Save & Portability**: Upon saving, the system dynamically recalculates each chapter's `end` time based on the next chapter's `start` time, bounding the final chapter to the target audiobook's duration. Environment-specific fields (`id`, `end`, duration, locks) are intentionally omitted from the export format to ensure cross-compatibility with media files of different lengths.
+- **Save & Portability**: Upon saving, the system dynamically recalculates each chapter's `end` time based on the next chapter's `start` time, bounding the final chapter to the target audiobook's duration. Non-portable or editor-specific data (such as `id`, `end`, and lock status) are intentionally omitted from the export format to maximize portability.
 
-**Chapter List JSON Format Specification** The feature introduces a portable, versioned JSON format. Unknown or extra fields are strictly rejected to prevent invalid data ingestion.
+**Chapter List JSON Format Specification**
+The feature introduces a portable, versioned JSON format. Unknown or extra fields are strictly rejected to prevent invalid data ingestion.
 
 - `version` (Number): The format version. Currently only `1` is supported.
 - `chapters` (Array): A non-empty array containing the chapter objects.
@@ -134,22 +135,39 @@ Implements a robust JSON export/import format for chapter lists, allowing users 
 - _Error Handling_: Malformed JSON structures reject the file before the preview stage. Valid structures that violate business rules (e.g., negative start times) will display an error in the preview and disable the "Apply" action.
 
 **Example Payload**
-
 ```json
 {
   "version": 1,
   "chapters": [
     {
-      "title": "Opening Credits",
+      "title": "第一章",
       "start": 0
     },
     {
-      "title": "Chapter 1: The Beginning",
-      "start": 15.5
+      "title": "Café 日本語",
+      "start": 20.5
     }
   ]
 }
 ```
+
+#### Checks and results
+
+- **Server tests**: 407/407 passed.
+- **Chapter-specific tests**: 18/18 passed.
+- **Client Cypress tests**: 133/133 passed for the full client component suite, including 4/4 passed specifically for the chapter UI.
+- **Manual validation**: Verified core import/export flows, preview cancellations, Apply vs. Save distinctions, identical file re-imports, Unicode handling, invalid time rejections, and portability across valid book durations.
+
+#### Changes from the RFC
+
+- **Undo/Redo Integration**: Instead of establishing a completely new history baseline, applying an imported JSON is now integrated as one atomic undoable operation in the history stack.
+- **FileInput Reset**: Added logic to explicitly reset the `FileInput` after each read attempt. This ensures that if a user imports an invalid file, fixes it, and selects the exact same file path again, the system will correctly re-trigger the upload.
+- **Error Messaging Refinement**: Narrowed the business-error wording. Now, equivalent title/start data entering the shared business validator produces the exact same row-error validation logic and UI messages across the manual input path and the JSON import path (JSON schema errors, such as malformed structure or unknown fields, remain import-specific).
+- **Strict Validation Boundary**: Retained the strict version 1 schema validation (rejecting unknown fields completely) rather than ignoring them, prioritizing high data integrity and preventing users from assuming custom metadata is preserved.
+
+#### What remains
+
+There is no known remaining implementation work for this feature. The listed automated checks are fully passing, and the core manual validations have been successfully executed as documented above.
 
 ### @3amBEANS (Aiden Ha) — Undo and redo chapter edits before saving
 
